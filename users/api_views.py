@@ -1,0 +1,117 @@
+from django.contrib.auth import get_user_model
+from rest_framework import viewsets, mixins, status
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated, AllowAny
+
+from .permissions import IsAdmin, IsDriver, IsCustomer
+from .serializers import (
+    UserSerializer,
+    RegisterSerializer,
+    ChangePasswordSerializer,
+    CustomerProfileSerializer,
+    DriverProfileSerializer,
+    AdminProfileSerializer,
+    DriverDocumentSerializer,
+    DriverInviteCreateSerializer,
+    DriverInviteDetailSerializer,
+    DriverInviteAcceptSerializer,
+)
+
+User = get_user_model()
+
+
+class AuthViewSet(viewsets.GenericViewSet):
+    queryset = User.objects.all()
+    permission_classes = [AllowAny]
+
+    @action(methods=["post"], detail=False, url_path="register")
+    def register(self, request):
+        serializer = RegisterSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
+
+    @action(methods=["get"], detail=False, url_path="me", permission_classes=[IsAuthenticated])
+    def me(self, request):
+        return Response(UserSerializer(request.user).data)
+
+    @action(methods=["post"], detail=False, url_path="change-password", permission_classes=[IsAuthenticated])
+    def change_password(self, request):
+        s = ChangePasswordSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        if not request.user.check_password(s.validated_data["old_password"]):
+            return Response({"detail": "Old password incorrect"}, status=400)
+        request.user.set_password(s.validated_data["new_password"])
+        request.user.save(update_fields=["password"])
+        return Response({"detail": "Password changed"})
+
+
+class ProfileViewSet(viewsets.GenericViewSet):
+    permission_classes = [IsAuthenticated]
+
+    @action(methods=["get", "patch"], detail=False, url_path="customer", permission_classes=[IsAuthenticated, IsCustomer])
+    def customer(self, request):
+        profile = request.user.customer_profile
+        if request.method == "PATCH":
+            s = CustomerProfileSerializer(profile, data=request.data, partial=True)
+            s.is_valid(raise_exception=True)
+            s.save()
+        else:
+            s = CustomerProfileSerializer(profile)
+        return Response(s.data)
+
+    @action(methods=["get", "patch"], detail=False, url_path="driver", permission_classes=[IsAuthenticated, IsDriver])
+    def driver(self, request):
+        profile = request.user.driver_profile
+        if request.method == "PATCH":
+            s = DriverProfileSerializer(profile, data=request.data, partial=True)
+            s.is_valid(raise_exception=True)
+            s.save()
+        else:
+            s = DriverProfileSerializer(profile)
+        return Response(s.data)
+
+    @action(methods=["get", "patch"], detail=False, url_path="admin", permission_classes=[IsAuthenticated, IsAdmin])
+    def admin(self, request):
+        profile = request.user.admin_profile
+        if request.method == "PATCH":
+            s = AdminProfileSerializer(profile, data=request.data, partial=True)
+            s.is_valid(raise_exception=True)
+            s.save()
+        else:
+            s = AdminProfileSerializer(profile)
+        return Response(s.data)
+
+
+class DriverDocumentViewSet(mixins.CreateModelMixin,
+                             mixins.ListModelMixin,
+                             mixins.DestroyModelMixin,
+                             viewsets.GenericViewSet):
+    serializer_class = DriverDocumentSerializer
+    permission_classes = [IsAuthenticated, IsDriver]
+
+    def get_queryset(self):
+        return request.user.driver_profile.documents.all()  # type: ignore
+
+
+class DriverInviteViewSet(mixins.CreateModelMixin,
+                          mixins.ListModelMixin,
+                          viewsets.GenericViewSet):
+    permission_classes = [IsAuthenticated, IsAdmin]
+
+    def get_queryset(self):
+        from .models import DriverInvitation
+        return DriverInvitation.objects.all().order_by("-expires_at")
+
+    def get_serializer_class(self):
+        if self.action == "create":
+            return DriverInviteCreateSerializer
+        return DriverInviteDetailSerializer
+
+    @action(methods=["post"], detail=False, url_path="accept", permission_classes=[AllowAny])
+    def accept(self, request):
+        s = DriverInviteAcceptSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        user = s.save()
+        return Response(UserSerializer(user).data, status=201)
