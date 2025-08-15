@@ -1,6 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from users.api_views import AuthViewSet, ProfileViewSet, DriverDocumentViewSet, DriverInviteViewSet
+from users.api_views import AuthViewSet, ProfileViewSet,  DriverInviteViewSet,DriverDocumentViewSet
 
 router = DefaultRouter()
 router.register(r"auth", AuthViewSet, basename="auth")

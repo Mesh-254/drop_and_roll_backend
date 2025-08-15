@@ -1,7 +1,8 @@
+from datetime import timedelta
+
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from rest_framework import serializers
-from datetime import timedelta
 
 from .models import (
     CustomerProfile,
@@ -128,4 +129,48 @@ class DriverInviteAcceptSerializer(serializers.Serializer):
         )
         inv.accepted_at = timezone.now()
         inv.save(update_fields=["accepted_at"])
+        return user
+
+
+from rest_framework import serializers
+from django.contrib.auth import get_user_model
+
+from .models import DriverProfile
+
+User = get_user_model()
+
+
+class DriverInviteSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    phone = serializers.CharField(max_length=20, required=False, allow_blank=True)
+    full_name = serializers.CharField(max_length=255)
+    vehicle_type = serializers.ChoiceField(choices=DriverProfile.Vehicle, required=False)
+    license_number = serializers.CharField(max_length=50, required=False, allow_blank=True)
+
+    def validate_email(self, value):
+        if User.objects.filter(email=value).exists():
+            raise serializers.ValidationError("A user with this email already exists.")
+        return value
+
+    def create(self, validated_data):
+        """
+        Instead of creating a full driver account now, we can:
+        - create a pending user with role='driver' and is_active=False
+        - OR send an invite link via email with a token
+        """
+        user = User.objects.create_user(
+            email=validated_data["email"],
+            phone=validated_data.get("phone"),
+            full_name=validated_data["full_name"],
+            role=User.Role.DRIVER,
+            is_active=False  # activate when invite is accepted
+        )
+        # Optional: create a driver profile with partial info
+        DriverProfile.objects.create(
+            user=user,
+            vehicle_type=validated_data.get("vehicle_type", ""),
+            license_number=validated_data.get("license_number", ""),
+            is_verified=False,
+            status="inactive"
+        )
         return user

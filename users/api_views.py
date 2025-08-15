@@ -4,6 +4,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 
+from .models import DriverDocument
 from .permissions import IsAdmin, IsDriver, IsCustomer
 from .serializers import (
     UserSerializer,
@@ -25,26 +26,47 @@ class AuthViewSet(viewsets.GenericViewSet):
     queryset = User.objects.all()
     permission_classes = [AllowAny]
 
+    def get_serializer_class(self):
+        if self.action == "register":
+            return RegisterSerializer
+        elif self.action == "change_password":
+            return ChangePasswordSerializer
+        elif self.action == "me":
+            return UserSerializer
+        return UserSerializer  # default
+
     @action(methods=["post"], detail=False, url_path="register")
     def register(self, request):
-        serializer = RegisterSerializer(data=request.data)
+        serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
         return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
 
-    @action(methods=["get"], detail=False, url_path="me", permission_classes=[IsAuthenticated])
+    @action(
+        methods=["get"],
+        detail=False,
+        url_path="me",
+        permission_classes=[IsAuthenticated]
+    )
     def me(self, request):
-        return Response(UserSerializer(request.user).data)
+        serializer = self.get_serializer(request.user)
+        return Response(serializer.data)
 
-    @action(methods=["post"], detail=False, url_path="change-password", permission_classes=[IsAuthenticated])
+    @action(
+        methods=["post"],
+        detail=False,
+        url_path="change-password",
+        permission_classes=[IsAuthenticated]
+    )
     def change_password(self, request):
-        s = ChangePasswordSerializer(data=request.data)
-        s.is_valid(raise_exception=True)
-        if not request.user.check_password(s.validated_data["old_password"]):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        if not request.user.check_password(serializer.validated_data["old_password"]):
             return Response({"detail": "Old password incorrect"}, status=400)
-        request.user.set_password(s.validated_data["new_password"])
+        request.user.set_password(serializer.validated_data["new_password"])
         request.user.save(update_fields=["password"])
         return Response({"detail": "Password changed"})
+
 
 
 class ProfileViewSet(viewsets.GenericViewSet):
@@ -84,15 +106,25 @@ class ProfileViewSet(viewsets.GenericViewSet):
         return Response(s.data)
 
 
-class DriverDocumentViewSet(mixins.CreateModelMixin,
-                             mixins.ListModelMixin,
-                             mixins.DestroyModelMixin,
-                             viewsets.GenericViewSet):
+class DriverDocumentViewSet(
+    mixins.CreateModelMixin,
+    mixins.ListModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet
+):
     serializer_class = DriverDocumentSerializer
     permission_classes = [IsAuthenticated, IsDriver]
 
     def get_queryset(self):
-        return request.user.driver_profile.documents.all()  # type: ignore
+        # Prevent schema generation crash in Swagger/Redoc
+        if getattr(self, 'swagger_fake_view', False):
+            return DriverDocument.objects.none()
+
+        # Only return documents belonging to the logged-in driver
+        user = self.request.user
+        if hasattr(user, "driver_profile"):
+            return user.driver_profile.documents.all()
+        return DriverDocument.objects.none()
 
 
 class DriverInviteViewSet(mixins.CreateModelMixin,
