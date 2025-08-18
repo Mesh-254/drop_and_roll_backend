@@ -34,9 +34,10 @@ schema_view = get_schema_view(
 urlpatterns = [
     path('admin/', admin.site.urls),
 
-    path("api/", include("bookings.urls")),
+    path("api/booking/", include("bookings.urls")),
 
-    path("api/", include("users.urls")),
+    path("api/users/", include("users.urls")),
+    path("api/tracking/", include("tracking.urls")),
 
     path("api/auth/jwt/create/", TokenObtainPairView.as_view(), name="jwt-create"),
     path("api/auth/jwt/refresh/", TokenRefreshView.as_view(), name="jwt-refresh"),
@@ -44,4 +45,3 @@ urlpatterns = [
     path('swagger/', schema_view.with_ui('swagger', cache_timeout=0), name='schema-swagger-ui'),
     path('redoc/', schema_view.with_ui('redoc', cache_timeout=0), name='schema-redoc'),
 ]
-

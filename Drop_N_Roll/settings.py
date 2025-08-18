@@ -48,7 +48,8 @@ INSTALLED_APPS = [
     'django_seed',
 
     'bookings.apps.BookingsConfig',
-    'users.apps.UsersConfig'
+    'users.apps.UsersConfig',
+    'tracking.apps.TrackingConfig'
 ]
 
 MIDDLEWARE = [
