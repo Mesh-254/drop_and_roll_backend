@@ -38,6 +38,7 @@ urlpatterns = [
 
     path("api/users/", include("users.urls")),
     path("api/tracking/", include("tracking.urls")),
+    path("api/driver/", include("driver.urls")),
 
     path("api/auth/jwt/create/", TokenObtainPairView.as_view(), name="jwt-create"),
     path("api/auth/jwt/refresh/", TokenRefreshView.as_view(), name="jwt-refresh"),
