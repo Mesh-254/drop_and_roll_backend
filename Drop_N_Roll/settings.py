@@ -50,7 +50,8 @@ INSTALLED_APPS = [
     'bookings.apps.BookingsConfig',
     'users.apps.UsersConfig',
     'tracking.apps.TrackingConfig',
-    'driver.apps.DriverConfig'
+    'driver.apps.DriverConfig',
+    'payments.apps.PaymentsConfig'
 ]
 
 MIDDLEWARE = [
