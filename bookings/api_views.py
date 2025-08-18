@@ -1,17 +1,12 @@
-import csv
-import io
 from decimal import Decimal
 
-from django.utils import timezone
+from drf_yasg import openapi
+from drf_yasg.utils import swagger_auto_schema
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
-from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.response import Response
 
-from drf_yasg.utils import swagger_auto_schema
-from drf_yasg import openapi
-
-from .models import Address, Quote, Booking, RecurringSchedule, BulkUpload, BookingStatus
+from .models import Quote, Booking, RecurringSchedule, BookingStatus
 from .permissions import IsCustomer, IsAdminOrReadOnly
 from .serializers import (
     QuoteRequestSerializer,
@@ -19,7 +14,6 @@ from .serializers import (
     BookingCreateSerializer,
     BookingSerializer,
     RecurringScheduleSerializer,
-    BulkUploadSerializer,
 )
 from .utils.pricing import compute_quote
 
@@ -92,17 +86,18 @@ class BookingViewSet(viewsets.ModelViewSet):
             return qs.filter(driver__user=user)
         return qs
 
-    @swagger_auto_schema(
-        method="post",
-        request_body=openapi.Schema(
-            type=openapi.TYPE_OBJECT,
-            properties={
-                "driver_profile_id": openapi.Schema(type=openapi.TYPE_STRING, description="ID of the driver profile")
-            },
-            required=["driver_profile_id"]
-        ),
-        responses={200: BookingSerializer}
-    )
+    #
+    # @swagger_auto_schema(
+    #     method="post",
+    #     request_body=openapi.Schema(
+    #         type=openapi.TYPE_OBJECT,
+    #         properties={
+    #             "driver_profile_id": openapi.Schema(type=openapi.TYPE_STRING, description="ID of the driver profile")
+    #         },
+    #         required=["driver_profile_id"]
+    #     ),
+    #     responses={200: BookingSerializer}
+    # )
     @action(methods=["post"], detail=True, url_path="assign-driver")
     def assign_driver(self, request, pk=None):
         booking = self.get_object()
@@ -142,59 +137,6 @@ class BookingViewSet(viewsets.ModelViewSet):
         return Response({"id": str(booking.id), "status": booking.status})
 
     @swagger_auto_schema(
-        method="post",
-        manual_parameters=[
-            openapi.Parameter(
-                "file",
-                openapi.IN_FORM,
-                type=openapi.TYPE_FILE,
-                description="CSV file containing bookings"
-            )
-        ],
-        responses={201: BulkUploadSerializer}
-    )
-    @action(methods=["post"], detail=False, url_path="bulk-upload", parser_classes=[MultiPartParser, FormParser])
-    def bulk_upload(self, request):
-        user = request.user
-        upload = BulkUpload.objects.create(customer=user, csv_file=request.data.get("file"))
-        f = upload.csv_file.open("rb")
-        content = f.read().decode("utf-8")
-        reader = csv.DictReader(io.StringIO(content))
-        created, errors = 0, []
-        for idx, row in enumerate(reader, start=1):
-            try:
-                pickup = Address.objects.create(
-                    line1=row["pickup_line1"], city=row["pickup_city"],
-                    region=row.get("pickup_region"), postal_code=row.get("pickup_postal"),
-                    country=row.get("pickup_country", "KE")
-                )
-                drop = Address.objects.create(
-                    line1=row["drop_line1"], city=row["drop_city"],
-                    region=row.get("drop_region"), postal_code=row.get("drop_postal"),
-                    country=row.get("drop_country", "KE")
-                )
-                quote = Quote.objects.get(pk=row["quote_id"])
-                Booking.objects.create(
-                    customer=user,
-                    pickup_address=pickup,
-                    dropoff_address=drop,
-                    service_tier=row["service_tier"],
-                    status=BookingStatus.SCHEDULED,
-                    weight_kg=row["weight_kg"],
-                    distance_km=row["distance_km"],
-                    quote=quote,
-                    final_price=quote.final_price,
-                )
-                created += 1
-            except Exception as e:
-                errors.append({"row": idx, "error": str(e)})
-        upload.processed = True
-        upload.processed_at = timezone.now()
-        upload.result = {"created": created, "errors": errors}
-        upload.save(update_fields=["processed", "processed_at", "result"])
-        return Response(BulkUploadSerializer(upload).data)
-
-    @swagger_auto_schema(
         method="get",
         responses={200: RecurringScheduleSerializer(many=True)}
     )
@@ -203,11 +145,6 @@ class BookingViewSet(viewsets.ModelViewSet):
         qs = RecurringSchedule.objects.filter(customer=request.user)
         return Response(RecurringScheduleSerializer(qs, many=True).data)
 
-    @swagger_auto_schema(
-        method="post",
-        request_body=RecurringScheduleSerializer,
-        responses={201: RecurringScheduleSerializer}
-    )
     @action(methods=["post"], detail=False, url_path="recurring")
     def recurring_create(self, request):
         serializer = RecurringScheduleSerializer(data=request.data, context={"request": request})
