@@ -1,8 +1,14 @@
+from .models import DriverProfile
 from datetime import timedelta
 
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from rest_framework import serializers
+from django.utils.http import urlsafe_base64_encode
+from django.utils.encoding import force_bytes
+from django.contrib.auth.tokens import default_token_generator
+from django.conf import settings
+from .tasks import send_confirmation_email
 
 from .models import (
     CustomerProfile,
@@ -18,8 +24,10 @@ User = get_user_model()
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ["id", "email", "phone", "full_name", "role", "date_joined", "loyalty_points", "is_active"]
-        read_only_fields = ["id", "date_joined", "loyalty_points", "is_active", "role"]
+        fields = ["id", "email", "phone", "full_name", "role",
+                  "date_joined", "loyalty_points", "is_active"]
+        read_only_fields = ["id", "date_joined",
+                            "loyalty_points", "is_active", "role"]
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -30,13 +38,38 @@ class RegisterSerializer(serializers.ModelSerializer):
         fields = ["id", "email", "phone", "full_name", "password"]
 
     def create(self, validated_data):
-        return User.objects.create_user(
+        user = User.objects.create_user(
             email=validated_data["email"],
             password=validated_data["password"],
             full_name=validated_data["full_name"],
             phone=validated_data.get("phone"),
             role=User.Role.CUSTOMER,
         )
+        # Set inactive until confirmed
+        user.is_active = False
+        user.save()
+        # Send confirmation email
+        if user.role == User.Role.CUSTOMER and not user.is_active:
+            token = default_token_generator.make_token(user)
+            uid = urlsafe_base64_encode(force_bytes(str(user.pk)))
+            confirmation_link = f"{settings.FRONTEND_URL}/confirm-email/?uid={uid}&token={token}"
+
+            subject = "Confirm Your Drop 'N Roll Account"
+            message = (
+                f"Hi {user.full_name},\n\n"
+                f"Thank you for registering with Drop 'N Roll! "
+                f"Please confirm your email by clicking the link below:\n\n"
+                f"{confirmation_link}\n\n"
+                f"If you did not create this account, please ignore this email.\n\n"
+                f"Best,\nDrop 'N Roll Team"
+            )
+            from_email = settings.DEFAULT_FROM_EMAIL
+            recipient_list = [user.email]
+
+            send_confirmation_email.delay(
+                subject, message, from_email, recipient_list)
+
+        return user
 
 
 class ChangePasswordSerializer(serializers.Serializer):
@@ -47,7 +80,8 @@ class ChangePasswordSerializer(serializers.Serializer):
 class CustomerProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomerProfile
-        fields = ["default_pickup_address", "default_dropoff_address", "preferred_payment_method"]
+        fields = ["default_pickup_address",
+                  "default_dropoff_address", "preferred_payment_method"]
 
 
 class DriverProfileSerializer(serializers.ModelSerializer):
@@ -79,7 +113,8 @@ class DriverDocumentSerializer(serializers.ModelSerializer):
 
 
 class DriverInviteCreateSerializer(serializers.ModelSerializer):
-    expires_in_hours = serializers.IntegerField(write_only=True, required=False, default=72)
+    expires_in_hours = serializers.IntegerField(
+        write_only=True, required=False, default=72)
 
     class Meta:
         model = DriverInvitation
@@ -98,7 +133,8 @@ class DriverInviteCreateSerializer(serializers.ModelSerializer):
 class DriverInviteDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = DriverInvitation
-        fields = ["id", "email", "full_name", "token", "expires_at", "accepted_at"]
+        fields = ["id", "email", "full_name",
+                  "token", "expires_at", "accepted_at"]
 
 
 class DriverInviteAcceptSerializer(serializers.Serializer):
@@ -132,24 +168,23 @@ class DriverInviteAcceptSerializer(serializers.Serializer):
         return user
 
 
-from rest_framework import serializers
-from django.contrib.auth import get_user_model
-
-from .models import DriverProfile
-
 User = get_user_model()
 
 
 class DriverInviteSerializer(serializers.Serializer):
     email = serializers.EmailField()
-    phone = serializers.CharField(max_length=20, required=False, allow_blank=True)
+    phone = serializers.CharField(
+        max_length=20, required=False, allow_blank=True)
     full_name = serializers.CharField(max_length=255)
-    vehicle_type = serializers.ChoiceField(choices=DriverProfile.Vehicle, required=False)
-    license_number = serializers.CharField(max_length=50, required=False, allow_blank=True)
+    vehicle_type = serializers.ChoiceField(
+        choices=DriverProfile.Vehicle, required=False)
+    license_number = serializers.CharField(
+        max_length=50, required=False, allow_blank=True)
 
     def validate_email(self, value):
         if User.objects.filter(email=value).exists():
-            raise serializers.ValidationError("A user with this email already exists.")
+            raise serializers.ValidationError(
+                "A user with this email already exists.")
         return value
 
     def create(self, validated_data):
