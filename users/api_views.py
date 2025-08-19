@@ -3,6 +3,9 @@ from rest_framework import viewsets, mixins, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
+from django.utils.http import urlsafe_base64_decode
+from django.utils.encoding import force_str
+from django.contrib.auth.tokens import default_token_generator
 
 from .models import DriverDocument
 from .permissions import IsAdmin, IsDriver, IsCustomer
@@ -41,6 +44,24 @@ class AuthViewSet(viewsets.GenericViewSet):
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
         return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
+    
+
+    @action(methods=["get"], detail=False, url_path="confirm-email")
+    def confirm_email(self, request):
+        uidb64 = request.query_params.get('uid')
+        token = request.query_params.get('token')
+        try:
+            uid = force_str(urlsafe_base64_decode(uidb64))
+            user = User.objects.get(pk=uid)
+            if default_token_generator.check_token(user, token):
+                if not user.is_active:
+                    user.is_active = True
+                    user.save()
+                    return Response({'detail': 'Account confirmed successfully'}, status=status.HTTP_200_OK)
+                return Response({'detail': 'Account already confirmed'}, status=status.HTTP_200_OK)
+            return Response({'detail': 'Invalid token'}, status=status.HTTP_400_BAD_REQUEST)
+        except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+            return Response({'detail': 'Invalid confirmation link'}, status=status.HTTP_400_BAD_REQUEST)
 
     @action(
         methods=["get"],
@@ -66,6 +87,8 @@ class AuthViewSet(viewsets.GenericViewSet):
         request.user.set_password(serializer.validated_data["new_password"])
         request.user.save(update_fields=["password"])
         return Response({"detail": "Password changed"})
+    
+
 
 
 
