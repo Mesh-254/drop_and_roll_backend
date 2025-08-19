@@ -14,6 +14,7 @@ from pathlib import Path
 import environ
 from decouple import config
 from datetime import timedelta
+from celery import Celery
 
 env = environ.Env()
 
@@ -51,7 +52,9 @@ INSTALLED_APPS = [
     'users.apps.UsersConfig',
     'tracking.apps.TrackingConfig',
     'driver.apps.DriverConfig',
-    'payments.apps.PaymentsConfig'
+    'payments.apps.PaymentsConfig',
+
+    'celery',
 ]
 
 MIDDLEWARE = [
@@ -155,3 +158,23 @@ SIMPLE_JWT = {
     "BLACKLIST_AFTER_ROTATION": True,
     "AUTH_HEADER_TYPES": ("Bearer",),
 }
+
+# CELERY 
+CELERY_BROKER_URL = env("CELERY_BROKER_URL", default="redis://localhost:6379/0")
+CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", default="redis://localhost:6379/0")
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = env("CELERY_TIMEZONE", default="UTC")
+
+# Email backend 
+EMAIL_BACKEND =env("EMAIL_BACKEND", default="django.core.mail.backends.smtp.EmailBackend")
+EMAIL_HOST = env("EMAIL_HOST", default="smtp.gmail.com")
+EMAIL_PORT = env("EMAIL_PORT", default=587)
+EMAIL_HOST_USER =env("EMAIL_HOST_USER")
+EMAIL_HOST_PASSWORD =env("EMAIL_HOST_PASSWORD") 
+EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL")
+
+FRONTEND_URL = env("FRONTEND_URL")
+BACKEND_URL = env("BACKEND_URL", default="http://localhost:8000")
