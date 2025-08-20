@@ -3,9 +3,12 @@ from rest_framework import viewsets, mixins, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from django.utils.http import urlsafe_base64_decode
+from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from django.utils.encoding import force_str
 from django.contrib.auth.tokens import default_token_generator
+from .tasks import send_confirmation_email
+from django.utils.encoding import force_bytes
+
 
 from .models import DriverDocument
 from .permissions import IsAdmin, IsDriver, IsCustomer
@@ -44,7 +47,6 @@ class AuthViewSet(viewsets.GenericViewSet):
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
         return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
-    
 
     @action(methods=["get"], detail=False, url_path="confirm", permission_classes=[AllowAny])
     def confirm(self, request):
@@ -64,7 +66,23 @@ class AuthViewSet(viewsets.GenericViewSet):
             user.save()
             return Response({"detail": "Account successfully activated"}, status=status.HTTP_200_OK)
         return Response({"detail": "Invalid confirmation link"}, status=status.HTTP_400_BAD_REQUEST)
-    
+
+    @action(methods=["post"], detail=False, url_path="resend-confirmation", permission_classes=[AllowAny])
+    def resend_confirmation(self, request):
+        email = request.data.get("email", "").lower()
+        try:
+            user = User.objects.get(email=email)
+            if user.is_active:
+                return Response({"detail": "Account is already activated"}, status=status.HTTP_400_BAD_REQUEST)
+            # Logic to send a new confirmation email (e.g., generate new token, send email)
+            token = default_token_generator.make_token(user)
+            uid = urlsafe_base64_encode(force_bytes(user.pk))
+            # Send email with confirmation link (implementation depends on your email setup)
+            send_confirmation_email(user, uid, token)
+            return Response({"detail": "Confirmation email sent"}, status=status.HTTP_200_OK)
+        except User.DoesNotExist:
+            return Response({"detail": "No account found with this email"}, status=status.HTTP_400_BAD_REQUEST)
+
     @action(
         methods=["get"],
         detail=False,
@@ -89,9 +107,6 @@ class AuthViewSet(viewsets.GenericViewSet):
         request.user.set_password(serializer.validated_data["new_password"])
         request.user.save(update_fields=["password"])
         return Response({"detail": "Password changed"})
-    
-
-
 
 
 class ProfileViewSet(viewsets.GenericViewSet):
@@ -101,7 +116,8 @@ class ProfileViewSet(viewsets.GenericViewSet):
     def customer(self, request):
         profile = request.user.customer_profile
         if request.method == "PATCH":
-            s = CustomerProfileSerializer(profile, data=request.data, partial=True)
+            s = CustomerProfileSerializer(
+                profile, data=request.data, partial=True)
             s.is_valid(raise_exception=True)
             s.save()
         else:
@@ -112,7 +128,8 @@ class ProfileViewSet(viewsets.GenericViewSet):
     def driver(self, request):
         profile = request.user.driver_profile
         if request.method == "PATCH":
-            s = DriverProfileSerializer(profile, data=request.data, partial=True)
+            s = DriverProfileSerializer(
+                profile, data=request.data, partial=True)
             s.is_valid(raise_exception=True)
             s.save()
         else:
@@ -123,7 +140,8 @@ class ProfileViewSet(viewsets.GenericViewSet):
     def admin(self, request):
         profile = request.user.admin_profile
         if request.method == "PATCH":
-            s = AdminProfileSerializer(profile, data=request.data, partial=True)
+            s = AdminProfileSerializer(
+                profile, data=request.data, partial=True)
             s.is_valid(raise_exception=True)
             s.save()
         else:
