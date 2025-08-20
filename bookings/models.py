@@ -1,15 +1,18 @@
 from __future__ import annotations
-from django.db import models
-from django.conf import settings
-from django.utils import timezone
-from django.core.validators import MinValueValidator
+
 import uuid
+from decimal import Decimal
+
+from django.conf import settings
+from django.core.validators import MinValueValidator
+from django.db import models
+from django.utils import timezone
 
 
 class ServiceTier(models.TextChoices):
     STANDARD = "standard", "Standard"  # Same-Day/Next-Day
-    EXPRESS = "express", "Express"      # 1–2 hour
-    BUSINESS = "business", "Business"   # Scheduled (B2B)
+    EXPRESS = "express", "Express"  # 1–2 hour
+    BUSINESS = "business", "Business"  # Scheduled (B2B)
 
 
 class BookingStatus(models.TextChoices):
@@ -45,6 +48,39 @@ class Address(models.Model):
         return f"{self.line1}, {self.city} {self.postal_code or ''}".strip()
 
 
+class ServiceType(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    name = models.CharField(max_length=100, unique=True)  # e.g. "Standard Delivery"
+    type = models.CharField(max_length=50, choices=ServiceTier.choices)
+    price = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0.00"))
+
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Service Type"
+        verbose_name_plural = "Service Types"
+
+    def __str__(self):
+        return f"{self.name} ({self.get_type_display()})"
+
+
+class ShippingType(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=100, unique=True)
+    description = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Shipping Type"
+        verbose_name_plural = "Shipping Types"
+
+    def __str__(self):
+        return self.name
+
+
 class Quote(models.Model):
     """Snapshot of a computed quote for auditing and dispute resolution."""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -53,11 +89,15 @@ class Quote(models.Model):
     service_tier = models.CharField(max_length=20, choices=ServiceTier.choices)
     weight_kg = models.DecimalField(max_digits=6, decimal_places=2, validators=[MinValueValidator(0)])
     distance_km = models.DecimalField(max_digits=7, decimal_places=2, validators=[MinValueValidator(0)])
+    insurance = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
 
     base_price = models.DecimalField(max_digits=10, decimal_places=2)
     surge_multiplier = models.DecimalField(max_digits=5, decimal_places=2, default=1)
     discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     final_price = models.DecimalField(max_digits=10, decimal_places=2)
+
+    shipping_type = models.ForeignKey(ShippingType, on_delete=models.SET_NULL, null=True, related_name="quotes")
+    service_type = models.ForeignKey(ServiceType, on_delete=models.SET_NULL, null=True, related_name="quotes")
 
     meta = models.JSONField(default=dict, blank=True)  # pricing breakdown/inputs
 
@@ -69,7 +109,8 @@ class Booking(models.Model):
     """Single parcel delivery booking."""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     customer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="bookings")
-    driver = models.ForeignKey("users.DriverProfile", on_delete=models.SET_NULL, null=True, blank=True, related_name="bookings")
+    driver = models.ForeignKey("users.DriverProfile", on_delete=models.SET_NULL, null=True, blank=True,
+                               related_name="bookings")
 
     pickup_address = models.ForeignKey(Address, on_delete=models.PROTECT, related_name="pickup_bookings")
     dropoff_address = models.ForeignKey(Address, on_delete=models.PROTECT, related_name="dropoff_bookings")

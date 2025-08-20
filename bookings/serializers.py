@@ -1,13 +1,29 @@
-from rest_framework import serializers
-from .models import Address, Quote, Booking, RecurringSchedule, BulkUpload, ServiceTier, BookingStatus
-from .utils.pricing import compute_quote
 from decimal import Decimal
+
+from rest_framework import serializers
+
+from bookings.models import Address, Quote, Booking, RecurringSchedule, BulkUpload, ServiceTier, ShippingType, \
+    ServiceType
+
+
+class ShippingTypeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ShippingType
+        fields = ["id", "name", "description", "created_at"]
+
+
+class ServiceTypeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ServiceType
+        fields = ["id", "name", "type", "price", "created_at", "updated_at"]
+        read_only_fields = ["id", "created_at", "updated_at"]
 
 
 class AddressSerializer(serializers.ModelSerializer):
     class Meta:
         model = Address
-        fields = ["id", "line1", "line2", "city", "region", "postal_code", "country", "latitude", "longitude", "validated"]
+        fields = ["id", "line1", "line2", "city", "region", "postal_code", "country", "latitude", "longitude",
+                  "validated"]
         read_only_fields = ["id", "validated"]
 
 
@@ -20,9 +36,20 @@ class QuoteRequestSerializer(serializers.Serializer):
 
 
 class QuoteSerializer(serializers.ModelSerializer):
+    shipping_type = ShippingTypeSerializer(read_only=True)
+    shipping_type_id = serializers.UUIDField(write_only=True, required=False)
+
     class Meta:
         model = Quote
         fields = "__all__"
+
+    def create(self, validated_data):
+        shipping_type_id = validated_data.pop("shipping_type_id", None)
+        quote = Quote.objects.create(**validated_data)
+        if shipping_type_id:
+            quote.shipping_type_id = shipping_type_id
+            quote.save()
+        return quote
 
 
 class BookingCreateSerializer(serializers.ModelSerializer):
@@ -113,7 +140,8 @@ class RecurringScheduleSerializer(serializers.ModelSerializer):
         dropoff_data = validated_data.pop("dropoff_address")
         pickup = Address.objects.create(**pickup_data)
         dropoff = Address.objects.create(**dropoff_data)
-        return RecurringSchedule.objects.create(customer=user, pickup_address=pickup, dropoff_address=dropoff, **validated_data)
+        return RecurringSchedule.objects.create(customer=user, pickup_address=pickup, dropoff_address=dropoff,
+                                                **validated_data)
 
 
 class BulkUploadSerializer(serializers.ModelSerializer):
