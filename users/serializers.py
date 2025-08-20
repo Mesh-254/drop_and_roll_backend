@@ -37,9 +37,19 @@ class RegisterSerializer(serializers.ModelSerializer):
         model = User
         fields = ["id", "email", "phone", "full_name", "password"]
 
+    def validate_email(self, value):
+        value = value.lower()
+        if User.objects.filter(email=value).exists():
+            user = User.objects.get(email=value)
+            raise serializers.ValidationError({
+                "email": ["user with this email already exists."],
+                "is_active": user.is_active
+            })
+        return value
+
     def create(self, validated_data):
         user = User.objects.create_user(
-            email=validated_data["email"],
+            email=validated_data["email"].lower(),
             password=validated_data["password"],
             full_name=validated_data["full_name"],
             phone=validated_data.get("phone"),
@@ -52,7 +62,7 @@ class RegisterSerializer(serializers.ModelSerializer):
         if user.role == User.Role.CUSTOMER and not user.is_active:
             token = default_token_generator.make_token(user)
             uid = urlsafe_base64_encode(force_bytes(str(user.pk)))
-            confirmation_link = f"{settings.FRONTEND_URL}/confirm-email/?uid={uid}&token={token}"
+            confirmation_link = f"{settings.FRONTEND_URL}/account-confirmed/?uid={uid}&token={token}"
 
             subject = "Confirm Your Drop 'N Roll Account"
             message = (

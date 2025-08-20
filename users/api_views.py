@@ -46,23 +46,25 @@ class AuthViewSet(viewsets.GenericViewSet):
         return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
     
 
-    @action(methods=["get"], detail=False, url_path="confirm-email")
-    def confirm_email(self, request):
-        uidb64 = request.query_params.get('uid')
-        token = request.query_params.get('token')
+    @action(methods=["get"], detail=False, url_path="confirm", permission_classes=[AllowAny])
+    def confirm(self, request):
+        uid = request.query_params.get("uid")
+        token = request.query_params.get("token")
         try:
-            uid = force_str(urlsafe_base64_decode(uidb64))
+            uid = force_str(urlsafe_base64_decode(uid))
             user = User.objects.get(pk=uid)
-            if default_token_generator.check_token(user, token):
-                if not user.is_active:
-                    user.is_active = True
-                    user.save()
-                    return Response({'detail': 'Account confirmed successfully'}, status=status.HTTP_200_OK)
-                return Response({'detail': 'Account already confirmed'}, status=status.HTTP_200_OK)
-            return Response({'detail': 'Invalid token'}, status=status.HTTP_400_BAD_REQUEST)
         except (TypeError, ValueError, OverflowError, User.DoesNotExist):
-            return Response({'detail': 'Invalid confirmation link'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "Invalid confirmation link"}, status=status.HTTP_400_BAD_REQUEST)
 
+        if user.is_active:
+            return Response({"detail": "Account is already activated"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if default_token_generator.check_token(user, token):
+            user.is_active = True
+            user.save()
+            return Response({"detail": "Account successfully activated"}, status=status.HTTP_200_OK)
+        return Response({"detail": "Invalid confirmation link"}, status=status.HTTP_400_BAD_REQUEST)
+    
     @action(
         methods=["get"],
         detail=False,
