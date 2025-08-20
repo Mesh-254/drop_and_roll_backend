@@ -11,14 +11,14 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
 import os
+from datetime import timedelta
 from pathlib import Path
+
 import environ
 from decouple import config
-from datetime import timedelta
 from django.templatetags.static import static
 from django.urls import reverse_lazy
 from django.utils.translation import gettext_lazy as _
-
 
 env = environ.Env()
 
@@ -195,13 +195,13 @@ UNFOLD = {
             "href": lambda request: static("favicon.svg"),
         },
     ],
-    "SHOW_HISTORY": True, # show/hide "History" button, default: True
-    "SHOW_VIEW_ON_SITE": True, # show/hide "View on site" button, default: True
-    "SHOW_BACK_BUTTON": False, # show/hide "Back" button on changeform in header, default: False
+    "SHOW_HISTORY": True,  # show/hide "History" button, default: True
+    "SHOW_VIEW_ON_SITE": True,  # show/hide "View on site" button, default: True
+    "SHOW_BACK_BUTTON": False,  # show/hide "Back" button on changeform in header, default: False
     # "ENVIRONMENT": "sample_app.environment_callback", # environment name in header
     # "ENVIRONMENT_TITLE_PREFIX": "sample_app.environment_title_prefix_callback", # environment name prefix in title tag
     # "DASHBOARD_CALLBACK": "sample_app.dashboard_callback",
-    "THEME": "light", # Force theme: "dark" or "light". Will disable theme switcher
+    "THEME": "light",  # Force theme: "dark" or "light". Will disable theme switcher
     "LOGIN": {
         "image": lambda request: static("sample/login-bg.jpg"),
         "redirect_after": lambda request: reverse_lazy("admin:APP_MODEL_changelist"),
@@ -266,7 +266,7 @@ UNFOLD = {
             {
                 "title": _("Navigation"),
                 "separator": True,  # Top border
-                "collapsible": True,  # Collapsible group of links
+                "collapsible": False,  # Collapsible group of links
                 "items": [
                     {
                         "title": _("Dashboard"),
@@ -275,15 +275,25 @@ UNFOLD = {
                         # "badge": "sample_app.badge_callback",
                         "permission": lambda request: request.user.is_superuser,
                     },
-                    # {
-                    #     "title": _("Users"),
-                    #     "icon": "people",
-                    #     "link": reverse_lazy("admin:auth_user_changelist"),
-                    # },
+                    {
+                        "title": _("Shipping Types"),
+                        "icon": "local_shipping",
+                        "link": reverse_lazy("admin:bookings_shippingtype_changelist"),
+                        "permission": lambda request: request.user.is_superuser,
+                    },
+{
+                        "title": _("Service Types"),
+                        "icon": "local_shipping",
+                        "link": reverse_lazy("admin:bookings_servicetype_changelist"),
+                        "permission": lambda request: request.user.is_superuser,
+                    },
                 ],
             },
+
         ],
+
     },
+
     # "TABS": [
     #     {
     #         "models": [
@@ -299,6 +309,8 @@ UNFOLD = {
     #     },
     # ],
 }
+
+
 def dashboard_callback(request, context):
     """
     Callback to prepare custom variables for index template which is used as dashboard
@@ -317,7 +329,7 @@ def environment_callback(request):
     Callback has to return a list of two values represeting text value and the color
     type of the label displayed in top right corner.
     """
-    return ["Production", "danger"] # info, danger, warning, success
+    return ["Production", "danger"]  # info, danger, warning, success
 
 
 def badge_callback(request):
@@ -325,4 +337,3 @@ def badge_callback(request):
 
 # def permission_callback(request):
 #     return request.user.has_perm("sample_app.change_model")
-

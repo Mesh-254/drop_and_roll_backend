@@ -36,21 +36,79 @@ class QuoteRequestSerializer(serializers.Serializer):
 
 
 class QuoteSerializer(serializers.ModelSerializer):
+    # Nested serializers for read
     shipping_type = ShippingTypeSerializer(read_only=True)
-    shipping_type_id = serializers.UUIDField(write_only=True, required=False)
+    service_type = ServiceTypeSerializer(read_only=True)
+
+    # Write-only IDs for POST/PUT
+    shipping_type_id = serializers.UUIDField(write_only=True, required=False, allow_null=True)
+    service_type_id = serializers.UUIDField(write_only=True, required=False, allow_null=True)
 
     class Meta:
         model = Quote
-        fields = "__all__"
+        fields = [
+            "id",
+            "created_at",
+            "service_tier",
+            "weight_kg",
+            "distance_km",
+            "insurance",
+            "base_price",
+            "surge_multiplier",
+            "discount_amount",
+            "final_price",
+            "shipping_type",
+            "shipping_type_id",
+            "service_type",
+            "service_type_id",
+            "meta",
+        ]
+        read_only_fields = ["id", "created_at", "final_price"]
+
+    def _calculate_final_price(self, data: dict) -> Decimal:
+        """Compute final price dynamically."""
+        base_price = Decimal(data.get("base_price", 0))
+        surge_multiplier = Decimal(data.get("surge_multiplier", 1))
+        discount = Decimal(data.get("discount_amount", 0))
+        insurance = Decimal(data.get("insurance") or 0)
+
+        final_price = base_price * surge_multiplier - discount + insurance
+        # Ensure no negative final price
+        if final_price < 0:
+            final_price = Decimal("0.00")
+        return final_price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
     def create(self, validated_data):
         shipping_type_id = validated_data.pop("shipping_type_id", None)
+        service_type_id = validated_data.pop("service_type_id", None)
+
+        validated_data["final_price"] = self._calculate_final_price(validated_data)
         quote = Quote.objects.create(**validated_data)
+
         if shipping_type_id:
             quote.shipping_type_id = shipping_type_id
-            quote.save()
+        if service_type_id:
+            quote.service_type_id = service_type_id
+
+        quote.save()
         return quote
 
+    def update(self, instance, validated_data):
+        shipping_type_id = validated_data.pop("shipping_type_id", None)
+        service_type_id = validated_data.pop("service_type_id", None)
+
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+
+        instance.final_price = self._calculate_final_price(validated_data)
+
+        if shipping_type_id is not None:
+            instance.shipping_type_id = shipping_type_id
+        if service_type_id is not None:
+            instance.service_type_id = service_type_id
+
+        instance.save()
+        return instance
 
 class BookingCreateSerializer(serializers.ModelSerializer):
     pickup_address = AddressSerializer()
