@@ -45,7 +45,6 @@ class User(AbstractBaseUser, PermissionsMixin):
     email = models.EmailField(unique=True, max_length=255)
     phone = models.CharField(
         max_length=20,
-        unique=True,
         null=True,
         blank=True,
         validators=[RegexValidator(r"^[0-9+\-()\s]{7,20}$", "Invalid phone number")],

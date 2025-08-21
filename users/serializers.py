@@ -21,6 +21,11 @@ from .models import (
 User = get_user_model()
 
 
+class LoginSerializer(serializers.Serializer):
+    email = serializers.EmailField(required=True)
+    password = serializers.CharField(required=True, write_only=True)
+
+
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
@@ -41,44 +46,27 @@ class RegisterSerializer(serializers.ModelSerializer):
         value = value.lower()
         if User.objects.filter(email=value).exists():
             user = User.objects.get(email=value)
-            raise serializers.ValidationError({
-                "email": ["user with this email already exists."],
-                "is_active": user.is_active
-            })
+            if user.is_active:
+                raise serializers.ValidationError({
+                    "code": "ACCOUNT_ALREADY_EXISTS",
+                    "error": "Account already exists. Please sign in."
+                })
+            else:
+                raise serializers.ValidationError({
+                    "code": "ACCOUNT_NOT_ACTIVATED",
+                    "error": "Account exists but is not activated. Please confirm your email."
+                })
         return value
 
     def create(self, validated_data):
-        user = User.objects.create_user(
-            email=validated_data["email"].lower(),
-            password=validated_data["password"],
-            full_name=validated_data["full_name"],
-            phone=validated_data.get("phone"),
-            role=User.Role.CUSTOMER,
+        user = User(
+            email=validated_data['email'],
+            full_name=validated_data['full_name'],
+            phone=validated_data.get('phone', ''),
         )
-        # Set inactive until confirmed
-        user.is_active = False
+        user.set_password(validated_data['password'])
+        user.is_active = False  # Ensure inactive until confirmed
         user.save()
-        # Send confirmation email
-        if user.role == User.Role.CUSTOMER and not user.is_active:
-            token = default_token_generator.make_token(user)
-            uid = urlsafe_base64_encode(force_bytes(str(user.pk)))
-            confirmation_link = f"{settings.FRONTEND_URL}/account-confirmed/?uid={uid}&token={token}"
-
-            subject = "Confirm Your Drop 'N Roll Account"
-            message = (
-                f"Hi {user.full_name},\n\n"
-                f"Thank you for registering with Drop 'N Roll! "
-                f"Please confirm your email by clicking the link below:\n\n"
-                f"{confirmation_link}\n\n"
-                f"If you did not create this account, please ignore this email.\n\n"
-                f"Best,\nDrop 'N Roll Team"
-            )
-            from_email = settings.DEFAULT_FROM_EMAIL
-            recipient_list = [user.email]
-
-            send_confirmation_email.delay(
-                subject, message, from_email, recipient_list)
-
         return user
 
 

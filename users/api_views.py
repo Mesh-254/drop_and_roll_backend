@@ -6,9 +6,11 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from django.utils.encoding import force_str
 from django.contrib.auth.tokens import default_token_generator
+from django.conf import settings
 from .tasks import send_confirmation_email
 from django.utils.encoding import force_bytes
-
+from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework import serializers
 
 from .models import DriverDocument
 from .permissions import IsAdmin, IsDriver, IsCustomer
@@ -23,6 +25,7 @@ from .serializers import (
     DriverInviteCreateSerializer,
     DriverInviteDetailSerializer,
     DriverInviteAcceptSerializer,
+    LoginSerializer,
 )
 
 User = get_user_model()
@@ -39,14 +42,83 @@ class AuthViewSet(viewsets.GenericViewSet):
             return ChangePasswordSerializer
         elif self.action == "me":
             return UserSerializer
+        elif self.action == "login":
+            return LoginSerializer
         return UserSerializer  # default
 
-    @action(methods=["post"], detail=False, url_path="register")
-    def register(self, request):
+    @action(methods=["post"], detail=False, url_path="login", permission_classes=[AllowAny])
+    def login(self, request):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = serializer.save()
-        return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
+
+        email = serializer.validated_data["email"].lower()
+        password = serializer.validated_data["password"]
+
+        try:
+            user = User.objects.get(email=email)
+        except User.DoesNotExist:
+            return Response({
+                "code": "EMAIL_NOT_FOUND",
+                "error": "No account found with this email"
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        if not user.is_active:
+            return Response({
+                "code": "ACCOUNT_NOT_ACTIVATED",
+                "error": "Account is not activated"
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        if not user.check_password(password):
+            return Response({
+                "code": "INVALID_CREDENTIALS",
+                "error": "The email and password do not match"
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        refresh = RefreshToken.for_user(user)
+        return Response({
+            "refresh": str(refresh),
+            "access": str(refresh.access_token),
+        })
+
+    @action(methods=["post"], detail=False, url_path="register", permission_classes=[AllowAny])
+    def register(self, request):
+        serializer = self.get_serializer(data=request.data)
+        try:
+            serializer.is_valid(raise_exception=True)
+            user = serializer.save()
+
+            # Send confirmation email
+            try:
+                token = default_token_generator.make_token(user)
+                uid = urlsafe_base64_encode(force_bytes(user.pk))
+                subject = "Confirm Your Drop 'N Roll Account"
+                confirmation_link = f"{settings.FRONTEND_URL}/account-confirmed/?uid={uid}&token={token}"
+                message = (
+                    f"Hi {user.full_name},\n\n"
+                    f"Please confirm your email by clicking the link below:\n\n"
+                    f"{confirmation_link}\n\n"
+                    f"If you did not create this account, please ignore this email.\n\n"
+                    f"Best,\nDrop 'N Roll Team"
+                )
+                send_confirmation_email.delay(
+                    subject=subject,
+                    message=message,
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    recipient_list=[user.email]
+                )
+            except Exception as e:
+                # Log the error but don't fail the registration
+                print(f"Failed to send confirmation email: {str(e)}")
+                # You could add logging here
+
+            return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
+        except serializers.ValidationError as e:
+            return Response({
+                "code": e.detail.get("code", "UNKNOWN_ERROR"),
+                "error": e.detail.get("error", "Registration failed")
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+    # function to confirm email address
 
     @action(methods=["get"], detail=False, url_path="confirm", permission_classes=[AllowAny])
     def confirm(self, request):
@@ -56,32 +128,77 @@ class AuthViewSet(viewsets.GenericViewSet):
             uid = force_str(urlsafe_base64_decode(uid))
             user = User.objects.get(pk=uid)
         except (TypeError, ValueError, OverflowError, User.DoesNotExist):
-            return Response({"detail": "Invalid confirmation link"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({
+                "code": "INVALID_CONFIRMATION_LINK",
+                "error": "Invalid confirmation link"
+            }, status=status.HTTP_400_BAD_REQUEST)
 
         if user.is_active:
-            return Response({"detail": "Account is already activated"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({
+                "code": "ACCOUNT_ALREADY_ACTIVATED",
+                "error": "Account is already activated"
+            }, status=status.HTTP_400_BAD_REQUEST)
 
         if default_token_generator.check_token(user, token):
             user.is_active = True
             user.save()
-            return Response({"detail": "Account successfully activated"}, status=status.HTTP_200_OK)
-        return Response({"detail": "Invalid confirmation link"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({
+                "code": "ACCOUNT_ACTIVATED",
+                "detail": "Account successfully activated"
+            }, status=status.HTTP_200_OK)
+        return Response({
+            "code": "INVALID_CONFIRMATION_LINK",
+            "error": "Invalid confirmation link"
+        }, status=status.HTTP_400_BAD_REQUEST)
 
     @action(methods=["post"], detail=False, url_path="resend-confirmation", permission_classes=[AllowAny])
     def resend_confirmation(self, request):
         email = request.data.get("email", "").lower()
+        if not email:
+            return Response({
+                "code": "INVALID_EMAIL",
+                "error": "Email is required"
+            }, status=status.HTTP_400_BAD_REQUEST)
+
         try:
             user = User.objects.get(email=email)
             if user.is_active:
-                return Response({"detail": "Account is already activated"}, status=status.HTTP_400_BAD_REQUEST)
-            # Logic to send a new confirmation email (e.g., generate new token, send email)
+                return Response({
+                    "code": "ACCOUNT_ALREADY_ACTIVATED",
+                    "error": "Account is already activated"
+                }, status=status.HTTP_400_BAD_REQUEST)
             token = default_token_generator.make_token(user)
-            uid = urlsafe_base64_encode(force_bytes(user.pk))
-            # Send email with confirmation link (implementation depends on your email setup)
-            send_confirmation_email(user, uid, token)
-            return Response({"detail": "Confirmation email sent"}, status=status.HTTP_200_OK)
+            uid = urlsafe_base64_encode(force_bytes(str(user.pk)))
+            subject = "Confirm Your Drop 'N Roll Account"
+            confirmation_link = f"{settings.FRONTEND_URL}/account-confirmed/?uid={uid}&token={token}"
+            message = (
+                f"Hi {user.full_name},\n\n"
+                f"Please confirm your email by clicking the link below:\n\n"
+                f"{confirmation_link}\n\n"
+                f"If you did not create this account, please ignore this email.\n\n"
+                f"Best,\nDrop 'N Roll Team"
+            )
+            try:
+                send_confirmation_email.delay(
+                    subject=subject,
+                    message=message,
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    recipient_list=[user.email]
+                )
+                return Response({
+                    "code": "CONFIRMATION_SENT",
+                    "detail": "Confirmation email sent"
+                }, status=status.HTTP_200_OK)
+            except Exception as e:
+                return Response({
+                    "code": "EMAIL_SEND_FAILED",
+                    "error": f"Failed to send confirmation email: {str(e)}"
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         except User.DoesNotExist:
-            return Response({"detail": "No account found with this email"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({
+                "code": "EMAIL_NOT_FOUND",
+                "error": "No account found with this email"
+            }, status=status.HTTP_400_BAD_REQUEST)
 
     @action(
         methods=["get"],
@@ -103,7 +220,10 @@ class AuthViewSet(viewsets.GenericViewSet):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         if not request.user.check_password(serializer.validated_data["old_password"]):
-            return Response({"detail": "Old password incorrect"}, status=400)
+            return Response({
+                "code": "INVALID_OLD_PASSWORD",
+                "error": "Old password incorrect"
+            }, status=status.HTTP_400_BAD_REQUEST)
         request.user.set_password(serializer.validated_data["new_password"])
         request.user.save(update_fields=["password"])
         return Response({"detail": "Password changed"})
@@ -159,11 +279,8 @@ class DriverDocumentViewSet(
     permission_classes = [IsAuthenticated, IsDriver]
 
     def get_queryset(self):
-        # Prevent schema generation crash in Swagger/Redoc
         if getattr(self, 'swagger_fake_view', False):
             return DriverDocument.objects.none()
-
-        # Only return documents belonging to the logged-in driver
         user = self.request.user
         if hasattr(user, "driver_profile"):
             return user.driver_profile.documents.all()
