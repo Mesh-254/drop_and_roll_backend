@@ -56,6 +56,7 @@ INSTALLED_APPS = [
 
     'celery',
     'corsheaders',
+    'social_django',
 ]
 
 MIDDLEWARE = [
@@ -74,8 +75,7 @@ ROOT_URLCONF = 'Drop_N_Roll.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [BASE_DIR / 'templates']
-        ,
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -158,6 +158,11 @@ REST_FRAMEWORK = {
     ),
 }
 
+AUTHENTICATION_BACKENDS = [
+    'django.contrib.auth.backends.ModelBackend',
+    'social_core.backends.google.GoogleOAuth2',
+]
+
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=30),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=1),
@@ -166,22 +171,35 @@ SIMPLE_JWT = {
     "AUTH_HEADER_TYPES": ("Bearer",),
 }
 
-# CELERY 
-CELERY_BROKER_URL = env("CELERY_BROKER_URL", default="redis://localhost:6379/0")
-CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", default="redis://localhost:6379/0")
+# CELERY
+CELERY_BROKER_URL = env("CELERY_BROKER_URL",
+                        default="redis://localhost:6379/0")
+CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND",
+                            default="redis://localhost:6379/0")
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = env("CELERY_TIMEZONE", default="UTC")
 
-# Email backend 
-EMAIL_BACKEND =env("EMAIL_BACKEND", default="django.core.mail.backends.smtp.EmailBackend")
+# Email backend
+EMAIL_BACKEND = env(
+    "EMAIL_BACKEND", default="django.core.mail.backends.smtp.EmailBackend")
 EMAIL_HOST = env("EMAIL_HOST", default="smtp.gmail.com")
 EMAIL_PORT = env("EMAIL_PORT", default=587)
-EMAIL_HOST_USER =env("EMAIL_HOST_USER")
-EMAIL_HOST_PASSWORD =env("EMAIL_HOST_PASSWORD") 
+EMAIL_HOST_USER = env("EMAIL_HOST_USER")
+EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD")
 EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL")
 
+# Urls
 FRONTEND_URL = env("FRONTEND_URL")
 BACKEND_URL = env("BACKEND_URL", default="http://localhost:8000")
+
+
+# Google OAuth2 settings
+GOOGLE_CLIENT_ID = env("CLIENT_ID")
+GOOGLE_CLIENT_SECRET = env("CLIENT_SECRET")
+
+# JWT settings for consistency with existing auth
+SOCIAL_AUTH_JSONFIELD_ENABLED = True
+SOCIAL_AUTH_USER_MODEL = 'users.User'
