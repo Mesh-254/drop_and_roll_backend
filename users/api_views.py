@@ -11,8 +11,11 @@ from .tasks import send_confirmation_email
 from django.utils.encoding import force_bytes
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework import serializers
+from rest_framework.views import APIView
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
 
-from .models import DriverDocument
+from .models import DriverDocument, CustomerProfile
 from .permissions import IsAdmin, IsDriver, IsCustomer
 from .serializers import (
     UserSerializer,
@@ -29,6 +32,72 @@ from .serializers import (
 )
 
 User = get_user_model()
+
+
+class GoogleLoginView(APIView):
+    """
+    Handles Google Login by verifying the ID token and logging in or registering the user.
+    Compatible with the custom User model defined in models.py.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        # Extract ID token from the request
+        id_token_str = request.data.get('token')
+        if not id_token_str:
+            return Response({
+                'code': 'INVALID_TOKEN',
+                'error': 'ID token is required'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # Verify the ID token using Google's library
+            idinfo = id_token.verify_oauth2_token(
+                id_token_str,
+                google_requests.Request(),
+                settings.GOOGLE_CLIENT_ID
+            )
+            if idinfo['iss'] not in ['accounts.google.com', 'https://accounts.google.com']:
+                raise ValueError('Wrong issuer.')
+
+            # Extract user information from the token
+            email = idinfo['email'].lower()
+            full_name = f"{idinfo.get('given_name', '')} {idinfo.get('family_name', '')}".strip()
+
+            # Check if user exists; if not, create a new user
+            user, created = User.objects.get_or_create(
+                email=email,
+                defaults={
+                    'full_name': full_name or email.split('@')[0],  # Fallback to email username
+                    'role': User.Role.CUSTOMER,  # Default to customer role
+                    'is_active': True  # Google users are auto-verified
+                }
+            )
+
+            # If user exists but is not active, activate them
+            if not user.is_active:
+                    user.is_active = True
+                    user.save()
+
+            # Generate JWT tokens
+            refresh = RefreshToken.for_user(user)
+            return Response({
+                'code': 'AUTH_SUCCESS',
+                'refresh': str(refresh),
+                'access': str(refresh.access_token),
+                'user': UserSerializer(user).data
+            }, status=status.HTTP_200_OK)
+
+        except ValueError as e:
+            return Response({
+                'code': 'INVALID_TOKEN',
+                'error': f'Invalid ID token: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({
+                'code': 'AUTH_ERROR',
+                'error': f'Authentication error: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
 
 
 class AuthViewSet(viewsets.GenericViewSet):
