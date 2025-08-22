@@ -5,6 +5,7 @@ from drf_yasg.utils import swagger_auto_schema
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.permissions import AllowAny
 
 from .models import Quote, Booking, RecurringSchedule, BookingStatus
 from .permissions import IsCustomer, IsAdminOrReadOnly
@@ -20,19 +21,21 @@ from .utils.pricing import compute_quote
 
 class QuoteViewSet(viewsets.GenericViewSet):
     queryset = Quote.objects.all()
+    permission_classes = [AllowAny] 
 
     @swagger_auto_schema(
         method="post",
         request_body=QuoteRequestSerializer,
         responses={201: QuoteSerializer}
     )
-    @action(methods=["post"], detail=False, url_path="compute")
+    @action(methods=["post"], detail=False, url_path="compute", permission_classes=[AllowAny])
     def compute(self, request):
         serializer = QuoteRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
         price, final, breakdown = compute_quote(
+            shipment_type=data["shipment_type"],
             service_tier=data["service_tier"],
             weight_kg=Decimal(data["weight_kg"]),
             distance_km=Decimal(data["distance_km"]),
@@ -41,6 +44,7 @@ class QuoteViewSet(viewsets.GenericViewSet):
         )
 
         quote = Quote.objects.create(
+            shipment_type=data["shipment_type"],
             service_tier=data["service_tier"],
             weight_kg=data["weight_kg"],
             distance_km=data["distance_km"],
@@ -56,6 +60,7 @@ class QuoteViewSet(viewsets.GenericViewSet):
 class BookingViewSet(viewsets.ModelViewSet):
     queryset = Booking.objects.select_related("pickup_address", "dropoff_address", "customer", "driver", "quote")
     serializer_class = BookingSerializer
+    permission_classes = [AllowAny] 
 
     def get_permissions(self):
         if self.action in ["create", "bulk_upload", "recurring_list", "recurring_create"]:
