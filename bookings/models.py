@@ -96,7 +96,7 @@ class Quote(models.Model):
     created_at = models.DateTimeField(default=timezone.now)
 
     service_tier = models.CharField(max_length=20, choices=ServiceTier.choices)
-    weight_kg = models.DecimalField(max_digits=6, decimal_places=2, validators=[MinValueValidator(0)])
+
     distance_km = models.DecimalField(max_digits=7, decimal_places=2, validators=[MinValueValidator(0)])
     insurance = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
     weight_kg = models.DecimalField(
@@ -114,8 +114,8 @@ class Quote(models.Model):
     discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     final_price = models.DecimalField(max_digits=10, decimal_places=2)
 
-    shipping_type = models.ForeignKey(ShippingType, on_delete=models.SET_NULL, null=True, related_name="quotes",default=ShipmentType.PARCELS)
-    service_type = models.ForeignKey(ServiceType, on_delete=models.SET_NULL, null=True, related_name="quotes",default=ServiceTier.STANDARD)
+    shipping_type = models.ForeignKey(ShippingType, on_delete=models.SET_NULL, null=True, related_name="quotes")
+    service_type = models.ForeignKey(ServiceType, on_delete=models.SET_NULL, null=True, related_name="quotes")
 
     meta = models.JSONField(default=dict, blank=True)  # pricing breakdown/inputs
 
@@ -135,7 +135,7 @@ class Booking(models.Model):
     dropoff_address = models.ForeignKey(
         Address, on_delete=models.PROTECT, related_name="dropoff_bookings")
 
-    shipment_type = models.ForeignKey(ServiceType, on_delete=models.PROTECT,related_name="shipment_type")
+    shipment_type = models.ForeignKey(ShippingType, on_delete=models.PROTECT,related_name="shipment_type", null=True, blank=True)
     service_tier = models.CharField(max_length=20, choices=ServiceTier.choices)
     status = models.CharField(
         max_length=20, choices=BookingStatus.choices, default=BookingStatus.PENDING)
