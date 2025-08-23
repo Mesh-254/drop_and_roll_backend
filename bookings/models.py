@@ -1,4 +1,7 @@
 from __future__ import annotations
+
+from decimal import Decimal
+
 from django.db import models
 from django.conf import settings
 from django.core.validators import MinValueValidator
@@ -7,6 +10,10 @@ from django.utils import timezone
 from django.core.validators import MinValueValidator
 import uuid
 
+class ShipmentType(models.TextChoices):
+    PARCELS = "parcels", "Parcels or Documents"
+    CARGO = "cargo", "Cargo/Freight"
+    BUSINESS_MAIL = "business", "Business Mail"
 
 class ServiceTier(models.TextChoices):
     STANDARD = "standard", "Standard"  # Same-Day/Next-Day
@@ -107,8 +114,8 @@ class Quote(models.Model):
     discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     final_price = models.DecimalField(max_digits=10, decimal_places=2)
 
-    shipping_type = models.ForeignKey(ShippingType, on_delete=models.SET_NULL, null=True, related_name="quotes")
-    service_type = models.ForeignKey(ServiceType, on_delete=models.SET_NULL, null=True, related_name="quotes")
+    shipping_type = models.ForeignKey(ShippingType, on_delete=models.SET_NULL, null=True, related_name="quotes",default=ShipmentType.PARCELS)
+    service_type = models.ForeignKey(ServiceType, on_delete=models.SET_NULL, null=True, related_name="quotes",default=ServiceTier.STANDARD)
 
     meta = models.JSONField(default=dict, blank=True)  # pricing breakdown/inputs
 
@@ -128,7 +135,7 @@ class Booking(models.Model):
     dropoff_address = models.ForeignKey(
         Address, on_delete=models.PROTECT, related_name="dropoff_bookings")
 
-    shipment_type = models.CharField(max_length=20, choices=ShipmentType.choices, blank=True)
+    shipment_type = models.ForeignKey(ServiceType, on_delete=models.PROTECT,related_name="shipment_type")
     service_tier = models.CharField(max_length=20, choices=ServiceTier.choices)
     status = models.CharField(
         max_length=20, choices=BookingStatus.choices, default=BookingStatus.PENDING)
