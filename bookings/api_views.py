@@ -4,17 +4,18 @@ from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated, IsAuthenticatedOrReadOnly
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 
-from .models import Quote, Booking, RecurringSchedule, BookingStatus
+from .models import Quote, Booking, RecurringSchedule, BookingStatus, ShippingType, ServiceType
 from .permissions import IsCustomer, IsAdminOrReadOnly
 from .serializers import (
     QuoteRequestSerializer,
     QuoteSerializer,
     BookingCreateSerializer,
     BookingSerializer,
-    RecurringScheduleSerializer,
+    RecurringScheduleSerializer, ShippingTypeSerializer, ServiceTypeSerializer,
 )
 from .utils.pricing import compute_quote
 
@@ -156,3 +157,14 @@ class BookingViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         obj = serializer.save()
         return Response(RecurringScheduleSerializer(obj).data, status=201)
+
+
+class ShippingTypeViewSet(viewsets.ModelViewSet):
+    queryset = ShippingType.objects.all()
+    serializer_class = ShippingTypeSerializer
+    permission_classes = [IsAuthenticatedOrReadOnly]
+
+class ServiceTypeViewSet(viewsets.ModelViewSet):
+    queryset = ServiceType.objects.all()
+    serializer_class = ServiceTypeSerializer
+    permission_classes = [IsAuthenticatedOrReadOnly]

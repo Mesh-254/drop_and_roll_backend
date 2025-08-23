@@ -1,22 +1,17 @@
 from __future__ import annotations
 from django.db import models
 from django.conf import settings
+from django.core.validators import MinValueValidator
+from django.db import models
 from django.utils import timezone
 from django.core.validators import MinValueValidator
 import uuid
 
 
-class ShipmentType(models.TextChoices):
-    PARCELS = "parcels", "Parcels or Documents"
-    CARGO = "cargo", "Cargo/Freight"
-    BUSINESS_MAIL = "business", "Business Mail"
-
-
 class ServiceTier(models.TextChoices):
     STANDARD = "standard", "Standard"  # Same-Day/Next-Day
-    EXPRESS = "express", "Express"      # 1–2 hour
-    BUSINESS = "business", "Business"   # Scheduled (B2B)
-    SPECIALIZED = "specialized", "Specialized"  # Temp-Sensitive
+    EXPRESS = "express", "Express"  # 1–2 hour
+    BUSINESS = "business", "Business"  # Scheduled (B2B)
 
 
 class BookingStatus(models.TextChoices):
@@ -55,15 +50,48 @@ class Address(models.Model):
         return f"{self.line1}, {self.city} {self.postal_code or ''}".strip()
 
 
+class ServiceType(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    name = models.CharField(max_length=100, unique=True)  # e.g. "Standard Delivery"
+    type = models.CharField(max_length=50, choices=ServiceTier.choices)
+    price = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0.00"))
+
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Service Type"
+        verbose_name_plural = "Service Types"
+
+    def __str__(self):
+        return f"{self.name} ({self.get_type_display()})"
+
+
+class ShippingType(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=100, unique=True)
+    description = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Shipping Type"
+        verbose_name_plural = "Shipping Types"
+
+    def __str__(self):
+        return self.name
+
+
 class Quote(models.Model):
     """Snapshot of a computed quote for auditing and dispute resolution."""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     created_at = models.DateTimeField(default=timezone.now)
 
-    shipment_type = models.CharField(
-        max_length=20, choices=ShipmentType.choices, blank=True)
-
     service_tier = models.CharField(max_length=20, choices=ServiceTier.choices)
+    weight_kg = models.DecimalField(max_digits=6, decimal_places=2, validators=[MinValueValidator(0)])
+    distance_km = models.DecimalField(max_digits=7, decimal_places=2, validators=[MinValueValidator(0)])
+    insurance = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
     weight_kg = models.DecimalField(
         max_digits=6, decimal_places=2, validators=[MinValueValidator(0)])
     distance_km = models.DecimalField(
@@ -75,14 +103,14 @@ class Quote(models.Model):
     dimensions = models.JSONField(default=dict, blank=True)
 
     base_price = models.DecimalField(max_digits=10, decimal_places=2)
-    surge_multiplier = models.DecimalField(
-        max_digits=5, decimal_places=2, default=1)
-    discount_amount = models.DecimalField(
-        max_digits=10, decimal_places=2, default=0)
+    surge_multiplier = models.DecimalField(max_digits=5, decimal_places=2, default=1)
+    discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     final_price = models.DecimalField(max_digits=10, decimal_places=2)
 
-    # pricing breakdown/inputs
-    meta = models.JSONField(default=dict, blank=True)
+    shipping_type = models.ForeignKey(ShippingType, on_delete=models.SET_NULL, null=True, related_name="quotes")
+    service_type = models.ForeignKey(ServiceType, on_delete=models.SET_NULL, null=True, related_name="quotes")
+
+    meta = models.JSONField(default=dict, blank=True)  # pricing breakdown/inputs
 
     def __str__(self):
         return f"{self.service_tier} KES {self.final_price} ({self.distance_km}km, {self.weight_kg}kg)"
@@ -91,10 +119,9 @@ class Quote(models.Model):
 class Booking(models.Model):
     """Single parcel delivery booking."""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    customer = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="bookings")
-    driver = models.ForeignKey("users.DriverProfile", on_delete=models.SET_NULL,
-                               null=True, blank=True, related_name="bookings")
+    customer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="bookings")
+    driver = models.ForeignKey("users.DriverProfile", on_delete=models.SET_NULL, null=True, blank=True,
+                               related_name="bookings")
 
     pickup_address = models.ForeignKey(
         Address, on_delete=models.PROTECT, related_name="pickup_bookings")
@@ -110,7 +137,7 @@ class Booking(models.Model):
         max_digits=6, decimal_places=2, validators=[MinValueValidator(0)])
     distance_km = models.DecimalField(
         max_digits=7, decimal_places=2, validators=[MinValueValidator(0)])
-    
+
     fragile = models.BooleanField(default=False)
     insurance_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0, validators=[MinValueValidator(0)])
     dimensions = models.JSONField(default=dict, blank=True)

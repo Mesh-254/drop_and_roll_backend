@@ -1,39 +1,100 @@
 from rest_framework import serializers
-from .models import Address, Quote, Booking, RecurringSchedule, BulkUpload, ServiceTier, BookingStatus, ShipmentType
+from .models import Address, Quote, Booking, RecurringSchedule, BulkUpload, ServiceTier, BookingStatus
 from .utils.pricing import compute_quote
 from decimal import Decimal
+
+from rest_framework import serializers
+
+from bookings.models import Address, Quote, Booking, RecurringSchedule, BulkUpload, ServiceTier, ShippingType, \
+    ServiceType
+
+
+class ShippingTypeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ShippingType
+        fields = ["id", "name", "description", "created_at"]
+
+
+class ServiceTypeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ServiceType
+        fields = ["id", "name", "type", "price", "created_at", "updated_at"]
+        read_only_fields = ["id", "created_at", "updated_at"]
 
 
 class AddressSerializer(serializers.ModelSerializer):
     class Meta:
         model = Address
-        fields = ["id", "line1", "line2", "city", "region",
-                  "postal_code", "country", "latitude", "longitude", "validated"]
+        fields = ["id", "line1", "line2", "city", "region", "postal_code", "country", "latitude", "longitude",
+                  "validated"]
         read_only_fields = ["id", "validated"]
 
 
 class QuoteRequestSerializer(serializers.Serializer):
-    shipment_type = serializers.ChoiceField(
-        choices=ShipmentType.choices, required=True)
     service_tier = serializers.ChoiceField(choices=ServiceTier.choices)
-    weight_kg = serializers.DecimalField(
-        max_digits=6, decimal_places=2, min_value=Decimal("0"))
-    distance_km = serializers.DecimalField(
-        max_digits=7, decimal_places=2, min_value=Decimal("0"))
-    fragile = serializers.BooleanField(default=False)
-    insurance_amount = serializers.DecimalField(
-        max_digits=10, decimal_places=2, min_value=Decimal("0"), default=Decimal("0"))
-    dimensions = serializers.JSONField(default=dict)
-    surge = serializers.DecimalField(
-        max_digits=5, decimal_places=2, required=False, default=Decimal("1.00"))
-    discount = serializers.DecimalField(
-        max_digits=10, decimal_places=2, required=False, default=Decimal("0.00"))
+    weight_kg = serializers.DecimalField(max_digits=6, decimal_places=2, min_value=Decimal("0"))
+    distance_km = serializers.DecimalField(max_digits=7, decimal_places=2, min_value=Decimal("0"))
+    surge = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, default=Decimal("1.00"))
+    discount = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, default=Decimal("0.00"))
 
 
 class QuoteSerializer(serializers.ModelSerializer):
+    # Nested serializers for read
+    shipping_type = ShippingTypeSerializer(read_only=True)
+    service_type = ServiceTypeSerializer(read_only=True)
+
+    # Write-only IDs for POST/PUT
+    shipping_type_id = serializers.UUIDField(write_only=True, required=False, allow_null=True)
+    service_type_id = serializers.UUIDField(write_only=True, required=False, allow_null=True)
+
     class Meta:
         model = Quote
-        fields = "__all__"
+        fields = [
+            "id",
+            "created_at",
+            "service_tier",
+            "weight_kg",
+            "distance_km",
+            "insurance",
+            "base_price",
+            "surge_multiplier",
+            "discount_amount",
+            "final_price",
+            "shipping_type",
+            "shipping_type_id",
+            "service_type",
+            "service_type_id",
+            "meta",
+        ]
+        read_only_fields = ["id", "created_at", "final_price"]
+
+    def _calculate_final_price(self, data: dict) -> Decimal:
+        """Compute final price dynamically."""
+        base_price = Decimal(data.get("base_price", 0))
+        surge_multiplier = Decimal(data.get("surge_multiplier", 1))
+        discount = Decimal(data.get("discount_amount", 0))
+        insurance = Decimal(data.get("insurance") or 0)
+
+        final_price = base_price * surge_multiplier - discount + insurance
+        # Ensure no negative final price
+        if final_price < 0:
+            final_price = Decimal("0.00")
+        return final_price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    def create(self, validated_data):
+        shipping_type_id = validated_data.pop("shipping_type_id", None)
+        service_type_id = validated_data.pop("service_type_id", None)
+
+        validated_data["final_price"] = self._calculate_final_price(validated_data)
+        quote = Quote.objects.create(**validated_data)
+
+        if shipping_type_id:
+            quote.shipping_type_id = shipping_type_id
+        if service_type_id:
+            quote.service_type_id = service_type_id
+
+        quote.save()
+        return quote
 
 
 class BookingCreateSerializer(serializers.ModelSerializer):
@@ -45,13 +106,9 @@ class BookingCreateSerializer(serializers.ModelSerializer):
         model = Booking
         fields = [
             "id",
-            "shipment_type",
             "service_tier",
             "weight_kg",
             "distance_km",
-            "fragile",
-            "insurance_amount",
-            "dimensions",
             "pickup_address",
             "dropoff_address",
             "quote_id",
@@ -78,15 +135,7 @@ class BookingCreateSerializer(serializers.ModelSerializer):
             pickup_address=pickup,
             dropoff_address=dropoff,
             quote=quote,
-            shipment_type=quote.shipment_type,
-            service_tier=quote.service_tier,
-            weight_kg=quote.weight_kg,
-            distance_km=quote.distance_km,
-            fragile=quote.fragile,
-            insurance_amount=quote.insurance_amount,
-            dimensions=quote.dimensions,
             final_price=quote.final_price,
-            discount_applied=quote.discount_amount,
             **validated_data,
         )
         return booking
@@ -103,14 +152,10 @@ class BookingSerializer(serializers.ModelSerializer):
             "id",
             "customer",
             "driver",
-            "shipment_type",
             "service_tier",
             "status",
             "weight_kg",
             "distance_km",
-            "fragile",
-            "insurance_amount",
-            "dimensions",
             "final_price",
             "pickup_address",
             "dropoff_address",
@@ -141,7 +186,8 @@ class RecurringScheduleSerializer(serializers.ModelSerializer):
         dropoff_data = validated_data.pop("dropoff_address")
         pickup = Address.objects.create(**pickup_data)
         dropoff = Address.objects.create(**dropoff_data)
-        return RecurringSchedule.objects.create(customer=user, pickup_address=pickup, dropoff_address=dropoff, **validated_data)
+        return RecurringSchedule.objects.create(customer=user, pickup_address=pickup, dropoff_address=dropoff,
+                                                **validated_data)
 
 
 class BulkUploadSerializer(serializers.ModelSerializer):
