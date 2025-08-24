@@ -200,10 +200,22 @@ class BookingViewSet(viewsets.ModelViewSet):
 class ShippingTypeViewSet(viewsets.ModelViewSet):
     queryset = ShippingType.objects.all()
     serializer_class = ShippingTypeSerializer
-    permission_classes = [IsAuthenticatedOrReadOnly]
+
+    def get_permissions(self):
+        if self.action in ["list", "retrieve"]:  # anyone can read
+            return [IsAuthenticatedOrReadOnly()]
+        if self.action in ["create", "update", "partial_update", "destroy"]:
+            return [IsAdminOrReadOnly()]
+        return super().get_permissions()
 
 
 class ServiceTypeViewSet(viewsets.ModelViewSet):
     queryset = ServiceType.objects.all()
     serializer_class = ServiceTypeSerializer
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    
+    def get_permissions(self):
+        if self.action in ["list", "retrieve"]:  # anyone can read
+            return [IsAuthenticatedOrReadOnly()]
+        if self.action in ["create", "update", "partial_update", "destroy"]:
+            return [IsAdminOrReadOnly()]
+        return super().get_permissions()
