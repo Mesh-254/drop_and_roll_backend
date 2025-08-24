@@ -263,7 +263,8 @@ UNFOLD = {
     "THEME": "light",  # Force theme: "dark" or "light". Will disable theme switcher
     "LOGIN": {
         "image": lambda request: static("sample/login-bg.jpg"),
-        "redirect_after": lambda request: reverse_lazy("admin:APP_MODEL_changelist"),
+        # "redirect_after": lambda request: reverse_lazy("admin:APP_MODEL_changelist"),
+        "redirect_after": lambda request: reverse_lazy("admin:index"),
     },
     "STYLES": [
         lambda request: static("css/style.css"),
