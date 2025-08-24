@@ -28,8 +28,10 @@ schema_view = get_schema_view(
         description="API documentation Drop and Roll project",
     ),
     public=True,
-    permission_classes=[permissions.AllowAny],
+    permission_classes=[permissions.AllowAny], 
 )
+
+
 
 urlpatterns = [
     path('admin/', admin.site.urls),
