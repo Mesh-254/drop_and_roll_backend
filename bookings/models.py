@@ -4,21 +4,10 @@ from decimal import Decimal
 
 from django.db import models
 from django.conf import settings
-from django.core.validators import MinValueValidator
+from django.core.validators import MinValueValidator, EmailValidator
 from django.db import models
 from django.utils import timezone
-from django.core.validators import MinValueValidator
 import uuid
-
-class ShipmentType(models.TextChoices):
-    PARCELS = "parcels", "Parcels or Documents"
-    CARGO = "cargo", "Cargo/Freight"
-    BUSINESS_MAIL = "business", "Business Mail"
-
-class ServiceTier(models.TextChoices):
-    STANDARD = "standard", "Standard"  # Same-Day/Next-Day
-    EXPRESS = "express", "Express"  # 1–2 hour
-    BUSINESS = "business", "Business"  # Scheduled (B2B)
 
 
 class BookingStatus(models.TextChoices):
@@ -58,25 +47,31 @@ class Address(models.Model):
 
 
 class ServiceType(models.Model):
+    """Dynamic service types (replaces ServiceTier)."""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-
-    name = models.CharField(max_length=100, unique=True)  # e.g. "Standard Delivery"
-    type = models.CharField(max_length=50, choices=ServiceTier.choices)
-    price = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0.00"))
-
+    # e.g., "Standard Delivery", "Express 1-Hour"
+    name = models.CharField(max_length=100, unique=True)
+    description = models.TextField(
+        blank=True, default="")  # e.g., "Same-Day/Next-Day"
+    price = models.DecimalField(
+        max_digits=10, decimal_places=2, default=Decimal("0.00"))
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         verbose_name = "Service Type"
         verbose_name_plural = "Service Types"
+        constraints = [models.UniqueConstraint(
+            fields=["name"], name="unique_service_type_name")]
 
     def __str__(self):
-        return f"{self.name} ({self.get_type_display()})"
+        return self.name
 
 
 class ShippingType(models.Model):
+    """Dynamic shipping types (replaces ShipmentType)."""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    # e.g., "Parcels", "Cargo"
     name = models.CharField(max_length=100, unique=True)
     description = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(default=timezone.now)
@@ -85,6 +80,8 @@ class ShippingType(models.Model):
     class Meta:
         verbose_name = "Shipping Type"
         verbose_name_plural = "Shipping Types"
+        constraints = [models.UniqueConstraint(
+            fields=["name"], name="unique_shipping_type_name")]
 
     def __str__(self):
         return self.name
@@ -95,38 +92,53 @@ class Quote(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     created_at = models.DateTimeField(default=timezone.now)
 
-    service_tier = models.CharField(max_length=20, choices=ServiceTier.choices)
-
-    distance_km = models.DecimalField(max_digits=7, decimal_places=2, validators=[MinValueValidator(0)])
-    insurance = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
-    weight_kg = models.DecimalField(
-        max_digits=6, decimal_places=2, validators=[MinValueValidator(0)])
     distance_km = models.DecimalField(
         max_digits=7, decimal_places=2, validators=[MinValueValidator(0)])
+    weight_kg = models.DecimalField(
+        max_digits=6, decimal_places=2, validators=[MinValueValidator(0)])
 
     fragile = models.BooleanField(default=False)
     insurance_amount = models.DecimalField(
-        max_digits=10, decimal_places=2, default=0, validators=[MinValueValidator(0)])
+        max_digits=10, decimal_places=2, default=0, blank=True, null=True, validators=[MinValueValidator(0)])
     dimensions = models.JSONField(default=dict, blank=True)
 
     base_price = models.DecimalField(max_digits=10, decimal_places=2)
-    surge_multiplier = models.DecimalField(max_digits=5, decimal_places=2, default=1)
-    discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    surge_multiplier = models.DecimalField(
+        max_digits=5, decimal_places=2, default=1)
+    discount_amount = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0)
     final_price = models.DecimalField(max_digits=10, decimal_places=2)
 
-    shipping_type = models.ForeignKey(ShippingType, on_delete=models.SET_NULL, null=True, related_name="quotes")
-    service_type = models.ForeignKey(ServiceType, on_delete=models.SET_NULL, null=True, related_name="quotes")
+    shipping_type = models.ForeignKey(
+        ShippingType, on_delete=models.SET_NULL, null=True, related_name="quotes")
+    service_type = models.ForeignKey(
+        ServiceType, on_delete=models.SET_NULL, null=True, related_name="quotes")
 
-    meta = models.JSONField(default=dict, blank=True)  # pricing breakdown/inputs
+    # pricing breakdown/inputs
+    meta = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["created_at"]),
+        ]
 
     def __str__(self):
-        return f"{self.service_tier} KES {self.final_price} ({self.distance_km}km, {self.weight_kg}kg)"
+        return f"{self.service_type.name if self.service_type else 'Unknown'} KES {self.final_price} ({self.distance_km}km, {self.weight_kg}kg)"
 
 
 class Booking(models.Model):
     """Single parcel delivery booking."""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    customer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="bookings")
+
+    customer = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+        null=True, blank=True, related_name="bookings")  # Allow null for anonymous users
+    guest_identifier = models.CharField(
+        max_length=255, blank=True, null=True, unique=True
+    )  # Unique identifier for anonymous users
+    guest_email = models.CharField(max_length=255, blank=True, null=True, validators=[
+                                   EmailValidator()], db_index=True)
+
     driver = models.ForeignKey("users.DriverProfile", on_delete=models.SET_NULL, null=True, blank=True,
                                related_name="bookings")
 
@@ -135,23 +147,13 @@ class Booking(models.Model):
     dropoff_address = models.ForeignKey(
         Address, on_delete=models.PROTECT, related_name="dropoff_bookings")
 
-    shipment_type = models.ForeignKey(ShippingType, on_delete=models.PROTECT,related_name="shipment_type", null=True, blank=True)
-    service_tier = models.CharField(max_length=20, choices=ServiceTier.choices)
     status = models.CharField(
         max_length=20, choices=BookingStatus.choices, default=BookingStatus.PENDING)
-
-    weight_kg = models.DecimalField(
-        max_digits=6, decimal_places=2, validators=[MinValueValidator(0)])
-    distance_km = models.DecimalField(
-        max_digits=7, decimal_places=2, validators=[MinValueValidator(0)])
-
-    fragile = models.BooleanField(default=False)
-    insurance_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0, validators=[MinValueValidator(0)])
-    dimensions = models.JSONField(default=dict, blank=True)
 
     # Pricing snapshot copied from the accepted Quote
     quote = models.ForeignKey(
         Quote, on_delete=models.PROTECT, related_name="bookings")
+    # Snapshot from quote
     final_price = models.DecimalField(max_digits=10, decimal_places=2)
 
     # Scheduling
@@ -170,9 +172,18 @@ class Booking(models.Model):
 
     class Meta:
         indexes = [
-            models.Index(fields=["status", "service_tier"]),
+            models.Index(fields=["status"]),
             models.Index(fields=["created_at"]),
+            models.Index(fields=["customer"]),
         ]
+
+    constraints = [
+        models.CheckConstraint(
+            check=models.Q(customer__isnull=False) | models.Q(
+                guest_email__isnull=False),
+            name="booking_must_have_customer_or_guest_email"
+        )
+    ]
 
     def __str__(self):
         return f"Booking {self.id} — {self.status}"
@@ -187,15 +198,15 @@ class RecurringSchedule(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     customer = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="recurring_schedules")
-    service_tier = models.CharField(max_length=20, choices=ServiceTier.choices)
 
-    pickup_address = models.ForeignKey(
-        Address, on_delete=models.PROTECT, related_name="recurring_pickups")
-    dropoff_address = models.ForeignKey(
-        Address, on_delete=models.PROTECT, related_name="recurring_dropoffs")
+    # Either based on a quote OR an existing booking
+    quote = models.ForeignKey(
+        "Quote", on_delete=models.PROTECT, null=True, blank=True, related_name="recurring_schedules"
+    )
+    booking = models.ForeignKey(
+        "Booking", on_delete=models.PROTECT, null=True, blank=True, related_name="recurring_schedules"
+    )
 
-    weight_kg = models.DecimalField(
-        max_digits=6, decimal_places=2, validators=[MinValueValidator(0)])
     recurrence = models.CharField(
         max_length=20, choices=RecurrencePeriod.choices)
     next_run_at = models.DateTimeField()
@@ -206,6 +217,29 @@ class RecurringSchedule(models.Model):
 
     def __str__(self):
         return f"Recurring {self.recurrence} for {self.customer_id}"
+
+    def get_source(self):
+        """Return whichever object this schedule is based on."""
+        return self.booking or self.quote
+
+    def resolve_fields(self):
+        """Return a dict of all schedule-relevant fields from the source."""
+        source = self.get_source()
+        if isinstance(source, Booking):
+            return {
+                "pickup_address": source.pickup_address,
+                "dropoff_address": source.dropoff_address,
+                "weight_kg": source.quote.weight_kg,
+                "service_type": source.quote.service_type,
+            }
+        elif isinstance(source, Quote):
+            return {
+                "pickup_address": None,  # You may require addresses if needed
+                "dropoff_address": None,
+                "weight_kg": source.weight_kg,
+                "service_type": source.service_type,
+            }
+        return {}
 
 
 class BulkUpload(models.Model):
