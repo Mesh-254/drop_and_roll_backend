@@ -143,9 +143,9 @@ class Booking(models.Model):
                                related_name="bookings")
 
     pickup_address = models.ForeignKey(
-        Address, on_delete=models.PROTECT, related_name="pickup_bookings")
+        Address, on_delete=models.PROTECT, related_name="pickup_bookings", blank=True, null=True)
     dropoff_address = models.ForeignKey(
-        Address, on_delete=models.PROTECT, related_name="dropoff_bookings")
+        Address, on_delete=models.PROTECT, related_name="dropoff_bookings", blank=True, null=True)
 
     status = models.CharField(
         max_length=20, choices=BookingStatus.choices, default=BookingStatus.PENDING)

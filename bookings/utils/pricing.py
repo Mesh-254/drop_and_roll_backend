@@ -67,20 +67,20 @@ def compute_quote(
         raise ValidationError("Discount cannot be negative")
 
     # Calculate base components
-    service_type = service_types[service_type]
-    base_price = service_type.price  # Use dynamic price from model
+    service_type_obj = service_types[service_type]  # Rename to avoid overwriting the input string
+    base_price = service_type_obj.price  # Use dynamic price from model
     weight_charge = weight_kg * Decimal('0.50')  # $0.50 per kg
     distance_charge = distance_km * Decimal('0.10')  # $0.10 per km
 
     # Compute subtotal
-    base_price = base_price + weight_charge + distance_charge
+    subtotal = base_price + weight_charge + distance_charge
 
     # Apply additional fees
-    insurance_fee = insurance_amount * Decimal('0.02') if insurance_amount > 0 else Decimal('0')
+    insurance_fee = insurance_amount + insurance_amount * Decimal('0.02') if insurance_amount > 0 else Decimal('0')
     fragile_charge = base_price * Decimal('0.25') if fragile else Decimal('0')
 
     # Compute total before surge and discount
-    total_price = base_price + insurance_fee + fragile_charge
+    total_price = subtotal + insurance_fee + fragile_charge
 
     # Apply surge and discount
     final_price = total_price * surge - discount
@@ -91,11 +91,12 @@ def compute_quote(
     # Build breakdown dictionary for audit trail, converting Decimals to float
     breakdown = {
         'shipment_type': shipment_type,
-        'service_type': service_type,
+        'service_type': service_type,  # Use the input string (name), not the object
         'base_price': float(base_price),
         'weight_charge': float(weight_charge),
         'distance_charge': float(distance_charge),
         'subtotal': float(subtotal),
+        'final_price': float(final_price),
         'insurance_fee': float(insurance_fee),
         'fragile_charge': float(fragile_charge),
         'surge_multiplier': float(surge),

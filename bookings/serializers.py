@@ -13,7 +13,8 @@ from bookings.models import Address, Quote, Booking, RecurringSchedule, BulkUplo
 class ShippingTypeSerializer(serializers.ModelSerializer):
     class Meta:
         model = ShippingType
-        fields = ["id", "name", "description", "created_at"]
+        read_only_fields = ["id", "created_at", "updated_at"]
+        fields = ["id", "name", "description"]
 
 
 class ServiceTypeSerializer(serializers.ModelSerializer):
