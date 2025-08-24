@@ -1,11 +1,12 @@
+import uuid
 from rest_framework import serializers
-from .models import Address, Quote, Booking, RecurringSchedule, BulkUpload, ServiceTier, BookingStatus
+from .models import Address, Quote, Booking, RecurringSchedule, BulkUpload, ServiceType, BookingStatus
 from .utils.pricing import compute_quote
 from decimal import Decimal
 
 from rest_framework import serializers
 
-from bookings.models import Address, Quote, Booking, RecurringSchedule, BulkUpload, ServiceTier, ShippingType, \
+from bookings.models import Address, Quote, Booking, RecurringSchedule, BulkUpload, ServiceType, ShippingType, \
     ServiceType
 
 
@@ -18,7 +19,7 @@ class ShippingTypeSerializer(serializers.ModelSerializer):
 class ServiceTypeSerializer(serializers.ModelSerializer):
     class Meta:
         model = ServiceType
-        fields = ["id", "name", "type", "price", "created_at", "updated_at"]
+        fields = ["id", "name", "description", "price", "created_at", "updated_at"]
         read_only_fields = ["id", "created_at", "updated_at"]
 
 
@@ -31,11 +32,33 @@ class AddressSerializer(serializers.ModelSerializer):
 
 
 class QuoteRequestSerializer(serializers.Serializer):
-    service_tier = serializers.ChoiceField(choices=ServiceTier.choices)
-    weight_kg = serializers.DecimalField(max_digits=6, decimal_places=2, min_value=Decimal("0"))
-    distance_km = serializers.DecimalField(max_digits=7, decimal_places=2, min_value=Decimal("0"))
-    surge = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, default=Decimal("1.00"))
-    discount = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, default=Decimal("0.00"))
+    shipping_type_id = serializers.UUIDField()
+    service_type_id = serializers.UUIDField()
+
+    weight_kg = serializers.DecimalField(
+        max_digits=6, decimal_places=2, min_value=Decimal("0"))
+    distance_km = serializers.DecimalField(
+        max_digits=7, decimal_places=2, min_value=Decimal("0"))
+
+    surge = serializers.DecimalField(
+        max_digits=5, decimal_places=2, required=False, default=Decimal("1.00"))
+    discount = serializers.DecimalField(
+        max_digits=10, decimal_places=2, required=False, default=Decimal("0.00"))
+
+    fragile = serializers.BooleanField(default=False)
+    insurance_amount = serializers.DecimalField(
+        max_digits=10, decimal_places=2, required=False, default=Decimal("0.00"))
+    dimensions = serializers.JSONField(required=False, default=dict)
+
+    def validate_shipping_type_id(self, value):
+        if not ShippingType.objects.filter(id=value).exists():
+            raise serializers.ValidationError("Invalid shipping type ID")
+        return value
+
+    def validate_service_type_id(self, value):
+        if not ServiceType.objects.filter(id=value).exists():
+            raise serializers.ValidationError("Invalid service type ID")
+        return value
 
 
 class QuoteSerializer(serializers.ModelSerializer):
@@ -44,18 +67,21 @@ class QuoteSerializer(serializers.ModelSerializer):
     service_type = ServiceTypeSerializer(read_only=True)
 
     # Write-only IDs for POST/PUT
-    shipping_type_id = serializers.UUIDField(write_only=True, required=False, allow_null=True)
-    service_type_id = serializers.UUIDField(write_only=True, required=False, allow_null=True)
+    shipping_type_id = serializers.UUIDField(
+        write_only=True, required=False, allow_null=True)
+    service_type_id = serializers.UUIDField(
+        write_only=True, required=False, allow_null=True)
 
     class Meta:
         model = Quote
         fields = [
             "id",
             "created_at",
-            "service_tier",
             "weight_kg",
             "distance_km",
-            "insurance",
+            "fragile",
+            "insurance_amount",
+            "dimensions",
             "base_price",
             "surge_multiplier",
             "discount_amount",
@@ -66,34 +92,36 @@ class QuoteSerializer(serializers.ModelSerializer):
             "service_type_id",
             "meta",
         ]
-        read_only_fields = ["id", "created_at", "final_price"]
-
-    def _calculate_final_price(self, data: dict) -> Decimal:
-        """Compute final price dynamically."""
-        base_price = Decimal(data.get("base_price", 0))
-        surge_multiplier = Decimal(data.get("surge_multiplier", 1))
-        discount = Decimal(data.get("discount_amount", 0))
-        insurance = Decimal(data.get("insurance") or 0)
-
-        final_price = base_price * surge_multiplier - discount + insurance
-        # Ensure no negative final price
-        if final_price < 0:
-            final_price = Decimal("0.00")
-        return final_price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        read_only_fields = ["id", "created_at", "final_price", "base_price"]
 
     def create(self, validated_data):
-        shipping_type_id = validated_data.pop("shipping_type_id", None)
-        service_type_id = validated_data.pop("service_type_id", None)
+        shipping_type_id = validated_data.pop("shipping_type_id")
+        service_type_id = validated_data.pop("service_type_id")
 
-        validated_data["final_price"] = self._calculate_final_price(validated_data)
-        quote = Quote.objects.create(**validated_data)
+        shipping_type = ShippingType.objects.get(id=shipping_type_id)
+        service_type = ServiceType.objects.get(id=service_type_id)
 
-        if shipping_type_id:
-            quote.shipping_type_id = shipping_type_id
-        if service_type_id:
-            quote.service_type_id = service_type_id
+        base_price, final_price, meta = compute_quote(
+            shipment_type=shipping_type.name,
+            service_type=service_type.name,
+            weight_kg=validated_data["weight_kg"],
+            distance_km=validated_data["distance_km"],
+            fragile=validated_data["fragile"],
+            insurance_amount=validated_data["insurance_amount"],
+            dimensions=validated_data["dimensions"],
+            surge=validated_data["surge"],
+            discount=validated_data["discount"],
+        )
 
-        quote.save()
+        validated_data["base_price"] = base_price
+        validated_data["meta"] = meta
+        validated_data["final_price"] = final_price
+
+        quote = Quote.objects.create(
+            shipping_type=shipping_type,
+            service_type=service_type,
+            **validated_data
+        )
         return quote
 
 
@@ -101,17 +129,16 @@ class BookingCreateSerializer(serializers.ModelSerializer):
     pickup_address = AddressSerializer()
     dropoff_address = AddressSerializer()
     quote_id = serializers.UUIDField(write_only=True)
+    guest_email = serializers.EmailField(required=False, write_only=True)
 
     class Meta:
         model = Booking
         fields = [
             "id",
-            "service_tier",
-            "weight_kg",
-            "distance_km",
             "pickup_address",
             "dropoff_address",
             "quote_id",
+            "guest_email",
             "scheduled_pickup_at",
             "scheduled_dropoff_at",
             "promo_code",
@@ -119,31 +146,47 @@ class BookingCreateSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id"]
 
+    def validate(self, data):
+        user = self.context["request"].user if self.context["request"].user.is_authenticated else None
+        if not user and not data.get("guest_email"):
+            raise serializers.ValidationError(
+                "guest_email is required for unauthenticated users")
+        quote = Quote.objects.get(pk=data["quote_id"])
+        return data
+
     def create(self, validated_data):
-        # set user to allow customer to be null or set to a "guest" user.
         user = self.context["request"].user if self.context["request"].user.is_authenticated else None
         pickup_data = validated_data.pop("pickup_address")
         dropoff_data = validated_data.pop("dropoff_address")
         quote_id = validated_data.pop("quote_id")
+        guest_email = validated_data.pop("guest_email", None)
 
+        quote = Quote.objects.get(pk=quote_id)
         pickup = Address.objects.create(**pickup_data)
         dropoff = Address.objects.create(**dropoff_data)
 
-        quote = Quote.objects.get(pk=quote_id)
-        booking = Booking.objects.create(
-            customer=user,
-            pickup_address=pickup,
-            dropoff_address=dropoff,
-            quote=quote,
-            final_price=quote.final_price,
+        booking_data = {
+            "customer": user,
+            "pickup_address": pickup,
+            "dropoff_address": dropoff,
+            "quote": quote,
+            "final_price": quote.final_price,
+            "discount_applied": quote.discount_amount,
             **validated_data,
-        )
+        }
+        if not user:
+            booking_data["guest_identifier"] = f"guest-{uuid.uuid4()}"
+            booking_data["guest_email"] = guest_email
+
+        booking = Booking.objects.create(**booking_data)
+        # to add later: confirmation email to guest_email with guest_identifier
         return booking
 
 
 class BookingSerializer(serializers.ModelSerializer):
     pickup_address = AddressSerializer()
     dropoff_address = AddressSerializer()
+    quote = QuoteSerializer(read_only=True)
     customer = serializers.SerializerMethodField()
 
     class Meta:
@@ -151,11 +194,10 @@ class BookingSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "customer",
+            "guest_identifier",
+            "guest_email",
             "driver",
-            "service_tier",
             "status",
-            "weight_kg",
-            "distance_km",
             "final_price",
             "pickup_address",
             "dropoff_address",
@@ -166,6 +208,7 @@ class BookingSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
             "notes",
+            "quote",
         ]
 
     def get_customer(self, obj):
@@ -173,21 +216,44 @@ class BookingSerializer(serializers.ModelSerializer):
 
 
 class RecurringScheduleSerializer(serializers.ModelSerializer):
-    pickup_address = AddressSerializer()
-    dropoff_address = AddressSerializer()
+    pickup_address = AddressSerializer(required=False)
+    dropoff_address = AddressSerializer(required=False)
 
     class Meta:
         model = RecurringSchedule
-        fields = "__all__"
+        fields = [
+            "id",
+            "customer",
+            "quote",
+            "booking",
+            "pickup_address",
+            "dropoff_address",
+            "recurrence",
+            "next_run_at",
+            "active",
+            "created_at",
+            "updated_at",
+        ]
+
+    def validate(self, data):
+        if not data.get("quote") and not data.get("booking"):
+            raise serializers.ValidationError(
+                "Either quote or booking must be provided")
+        return data
 
     def create(self, validated_data):
         user = self.context["request"].user
-        pickup_data = validated_data.pop("pickup_address")
-        dropoff_data = validated_data.pop("dropoff_address")
-        pickup = Address.objects.create(**pickup_data)
-        dropoff = Address.objects.create(**dropoff_data)
-        return RecurringSchedule.objects.create(customer=user, pickup_address=pickup, dropoff_address=dropoff,
-                                                **validated_data)
+        pickup_data = validated_data.pop("pickup_address", None)
+        dropoff_data = validated_data.pop("dropoff_address", None)
+        pickup = Address.objects.create(**pickup_data) if pickup_data else None
+        dropoff = Address.objects.create(
+            **dropoff_data) if dropoff_data else None
+        return RecurringSchedule.objects.create(
+            customer=user,
+            pickup_address=pickup,
+            dropoff_address=dropoff,
+            **validated_data
+        )
 
 
 class BulkUploadSerializer(serializers.ModelSerializer):
