@@ -1,0 +1,103 @@
+{% extends 'admin/base.html' %}
+{% load i18n unfold static %}
+
+{% block extrastyle %}
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+{% endblock %}
+
+{% block breadcrumbs %}{% endblock %}
+
+{% block title %}
+    {% if subtitle %}{{ subtitle }} | {% endif %}
+    {{ title }} | {{ site_title|default:_('Drop N Roll Administration') }}
+{% endblock %}
+
+{% block branding %}
+    {% include "unfold/helpers/site_branding.html" %}
+{% endblock %}
+
+{% block content %}
+    {% if error %}
+        {{ error }}
+    {% else %}
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 p-4">
+            {% component "unfold/components/card.html" with title="Total Users" %}
+                {% component "unfold/components/icon.html" %}
+                    person
+                {% endcomponent %}
+                {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
+                    {{ total_users }}
+                {% endcomponent %}
+                {% component "unfold/components/text.html" with class="text-gray-500" %}
+                    Admins: {{ total_admins }} | Customers: {{ total_customers }} | Drivers: {{ total_drivers }}
+                {% endcomponent %}
+            {% endcomponent %}
+
+            {% component "unfold/components/card.html" with title="Total Bookings" %}
+                {% component "unfold/components/icon.html" %}
+                    local_shipping
+                {% endcomponent %}
+                {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
+                    {{ total_bookings }}
+                {% endcomponent %}
+                {% component "unfold/components/text.html" with class="text-gray-500" %}
+                    Pending: {{ booking_status_counts.pending|default:0 }} | In Transit: {{ booking_status_counts.in_transit|default:0 }} | Delivered: {{ booking_status_counts.delivered|default:0 }}
+                {% endcomponent %}
+            {% endcomponent %}
+
+            {% component "unfold/components/card.html" with title="Total Quotes" %}
+                {% component "unfold/components/icon.html" %}
+                    description
+                {% endcomponent %}
+                {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
+                    {{ total_quotes }}
+                {% endcomponent %}
+                {% component "unfold/components/text.html" with class="text-gray-500" %}
+                    Service Types: {{ total_service_types }} | Shipping Types: {{ total_shipping_types }}
+                {% endcomponent %}
+            {% endcomponent %}
+
+            {% component "unfold/components/card.html" with title="Total Revenue" %}
+                {% component "unfold/components/icon.html" %}
+                    attach_money
+                {% endcomponent %}
+                {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
+                    KES {{ total_revenue|floatformat:2 }}
+                {% endcomponent %}
+                {% component "unfold/components/text.html" with class="text-gray-500" %}
+                    From {{ total_bookings }} bookings
+                {% endcomponent %}
+            {% endcomponent %}
+
+            {% component "unfold/components/card.html" with title="Recurring Schedules" %}
+                {% component "unfold/components/icon.html" %}
+                    event_repeat
+                {% endcomponent %}
+                {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
+                    {{ total_recurring_schedules }}
+                {% endcomponent %}
+                {% component "unfold/components/text.html" with class="text-gray-500" %}
+                    Active schedules
+                {% endcomponent %}
+            {% endcomponent %}
+
+            {% component "unfold/components/card.html" with title="Driver Status" %}
+                {% component "unfold/components/icon.html" %}
+                    directions_car
+                {% endcomponent %}
+                {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
+                    {{ total_drivers }}
+                {% endcomponent %}
+                {% component "unfold/components/text.html" with class="text-gray-500" %}
+                    Active: {{ driver_status_counts.active|default:0 }} | Inactive: {{ driver_status_counts.inactive|default:0 }} | Suspended: {{ driver_status_counts.suspended|default:0 }}
+                {% endcomponent %}
+            {% endcomponent %}
+        </div>
+
+        <div class="p-4">
+            Bookings Over Last 7 Days
+            {% component "unfold/components/chart/line.html" with data=chart_data height="300" width="100%" class="bg-primary-50" %}
+            {% endcomponent %}
+        </div>
+    {% endif %}
+{% endblock %}
