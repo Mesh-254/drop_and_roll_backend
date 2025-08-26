@@ -61,7 +61,12 @@ class QuoteRequestSerializer(serializers.Serializer):
             raise serializers.ValidationError("Invalid service type ID")
         return value
 
-
+class FloatDecimalField(serializers.DecimalField):
+    def to_representation(self, value):
+        if value is None:
+            return None
+        return float(value)
+    
 class QuoteSerializer(serializers.ModelSerializer):
     # Nested serializers for read
     shipping_type = ShippingTypeSerializer(read_only=True)
@@ -72,6 +77,15 @@ class QuoteSerializer(serializers.ModelSerializer):
         write_only=True, required=False, allow_null=True)
     service_type_id = serializers.UUIDField(
         write_only=True, required=False, allow_null=True)
+    
+    # Use FloatDecimalField for all Decimal fields
+    final_price = FloatDecimalField(max_digits=10, decimal_places=2)
+    base_price = FloatDecimalField(max_digits=10, decimal_places=2)
+    surge_multiplier = FloatDecimalField(max_digits=5, decimal_places=2)
+    discount_amount = FloatDecimalField(max_digits=10, decimal_places=2)
+    weight_kg = FloatDecimalField(max_digits=6, decimal_places=2)
+    distance_km = FloatDecimalField(max_digits=7, decimal_places=2)
+    insurance_amount = FloatDecimalField(max_digits=10, decimal_places=2)
 
     class Meta:
         model = Quote
