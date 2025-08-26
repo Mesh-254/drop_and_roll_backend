@@ -142,6 +142,11 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'  # New: Directory for collected static files
+# STATICFILES_DIRS = [
+#     BASE_DIR / 'static',  # Optional: Directory for project-specific static files
+# ]
+
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
@@ -234,6 +239,9 @@ UNFOLD = {
         },
         # ...
     ],
+
+    "DASHBOARD_CALLBACK": "Drop_N_Roll.utils.dashboard.dashboard_callback",
+
     "SITE_URL": "/",
     # "SITE_ICON": lambda request: static("icon.svg"),  # both modes, optimise for 32px height
     # "SITE_ICON": {
@@ -268,6 +276,9 @@ UNFOLD = {
     },
     "STYLES": [
         lambda request: static("css/style.css"),
+
+        lambda request: static("css/material-icons.css"),
+
     ],
     "SCRIPTS": [
         lambda request: static("js/script.js"),
@@ -275,38 +286,38 @@ UNFOLD = {
     "BORDER_RADIUS": "6px",
     "COLORS": {
         "base": {
-            "50": "249, 250, 251",
-            "100": "243, 244, 246",
-            "200": "229, 231, 235",
-            "300": "209, 213, 219",
-            "400": "156, 163, 175",
-            "500": "107, 114, 128",
-            "600": "75, 85, 99",
-            "700": "55, 65, 81",
-            "800": "31, 41, 55",
-            "900": "17, 24, 39",
-            "950": "3, 7, 18",
+            "50": "255, 255, 255",  # White
+            "100": "245, 245, 245",  # Light gray
+            "200": "229, 229, 229",  # Lighter gray
+            "300": "212, 212, 212",  # Light gray
+            "400": "163, 163, 163",  # Medium gray
+            "500": "115, 115, 115",  # Gray
+            "600": "82, 82, 82",  # Darker gray
+            "700": "64, 64, 64",  # Dark gray
+            "800": "38, 38, 38",  # Very dark gray
+            "900": "23, 23, 23",  # Near black
+            "950": "0, 0, 0",  # Black
         },
         "primary": {
-            "50": "250, 245, 255",
-            "100": "243, 232, 255",
-            "200": "233, 213, 255",
-            "300": "216, 180, 254",
-            "400": "192, 132, 252",
-            "500": "168, 85, 247",
-            "600": "147, 51, 234",
-            "700": "126, 34, 206",
-            "800": "107, 33, 168",
-            "900": "88, 28, 135",
-            "950": "59, 7, 100",
+            "50": "255, 247, 237",  # Very light orange
+            "100": "255, 237, 213",  # Light orange
+            "200": "254, 215, 170",  # Lighter orange
+            "300": "253, 186, 116",  # Light orange
+            "400": "251, 146, 60",  # Medium orange
+            "500": "249, 115, 22",  # Orange (#F97316)
+            "600": "234, 88, 12",  # Darker orange
+            "700": "194, 65, 12",  # Dark orange
+            "800": "154, 52, 18",  # Very dark orange
+            "900": "124, 45, 18",  # Deep orange
+            "950": "67, 20, 7",  # Darkest orange
         },
         "font": {
-            "subtle-light": "var(--color-base-500)",  # text-base-500
-            "subtle-dark": "var(--color-base-400)",  # text-base-400
-            "default-light": "var(--color-base-600)",  # text-base-600
-            "default-dark": "var(--color-base-300)",  # text-base-300
-            "important-light": "var(--color-base-900)",  # text-base-900
-            "important-dark": "var(--color-base-100)",  # text-base-100
+            "subtle-light": "var(--color-base-400)",  # Medium gray
+            "subtle-dark": "var(--color-base-300)",  # Light gray
+            "default-light": "var(--color-base-900)",  # Near black
+            "default-dark": "var(--color-base-50)",  # White
+            "important-light": "var(--color-base-950)",  # Black
+            "important-dark": "var(--color-base-50)",  # White
         },
     },
     # "EXTENSIONS": {
@@ -323,28 +334,39 @@ UNFOLD = {
         "command_search": False,  # Replace the sidebar search with the command search
         "show_all_applications": True,  # Dropdown with all applications and models
         "navigation": [
-            {
+{
                 "title": _("Navigation"),
-                "separator": True,  # Top border
-                "collapsible": False,  # Collapsible group of links
+                "separator": True,
+                "collapsible": False,
                 "items": [
                     {
                         "title": _("Dashboard"),
-                        "icon": "dashboard",  # Supported icon set: https://fonts.google.com/icons
+                        "icon": "home",  # Material Icon
                         "link": reverse_lazy("admin:index"),
-                        # "badge": "sample_app.badge_callback",
                         "permission": lambda request: request.user.is_superuser,
                     },
                     {
                         "title": _("Shipping Types"),
-                        "icon": "local_shipping",
+                        "icon": "local_shipping",  # Material Icon
                         "link": reverse_lazy("admin:bookings_shippingtype_changelist"),
                         "permission": lambda request: request.user.is_superuser,
                     },
                     {
                         "title": _("Service Types"),
-                        "icon": "local_shipping",
+                        "icon": "category",  # Material Icon
                         "link": reverse_lazy("admin:bookings_servicetype_changelist"),
+                        "permission": lambda request: request.user.is_superuser,
+                    },
+                    {
+                        "title": _("Quotes"),
+                        "icon": "description",  # Material Icon
+                        "link": reverse_lazy("admin:bookings_quote_changelist"),
+                        "permission": lambda request: request.user.is_superuser,
+                    },
+                    {
+                        "title": _("Bookings"),
+                        "icon": "local_shipping",  # Material Icon
+                        "link": reverse_lazy("admin:bookings_booking_changelist"),
                         "permission": lambda request: request.user.is_superuser,
                     },
                 ],
@@ -353,6 +375,7 @@ UNFOLD = {
         ],
 
     },
+
 
     # "TABS": [
     #     {
@@ -371,17 +394,7 @@ UNFOLD = {
 }
 
 
-def dashboard_callback(request, context):
-    """
-    Callback to prepare custom variables for index template which is used as dashboard
-    template. It can be overridden in application by creating custom admin/index.html.
-    """
-    context.update(
-        {
-            "sample": "example",  # this will be injected into templates/admin/index.html
-        }
-    )
-    return context
+
 
 
 def environment_callback(request):
