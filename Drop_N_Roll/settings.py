@@ -53,7 +53,6 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt.token_blacklist',
     'django_seed',
 
-
     'bookings.apps.BookingsConfig',
     'users.apps.UsersConfig',
     'tracking.apps.TrackingConfig',
@@ -330,13 +329,13 @@ UNFOLD = {
     #     },
     # },
     "SIDEBAR": {
-        "show_search": False,  # Search in applications and models names
+        "show_search": True,  # Search in applications and models names
         "command_search": False,  # Replace the sidebar search with the command search
-        "show_all_applications": True,  # Dropdown with all applications and models
+        "show_all_applications": False,  # Dropdown with all applications and models
         "navigation": [
-{
-                "title": _("Navigation"),
-                "separator": True,
+            {
+                "title": _("Dashboard"),
+                "separator": False,
                 "collapsible": False,
                 "items": [
                     {
@@ -345,6 +344,40 @@ UNFOLD = {
                         "link": reverse_lazy("admin:index"),
                         "permission": lambda request: request.user.is_superuser,
                     },
+                ]
+            },
+            {
+                "title": _("Users"),
+                "separator": True,
+                "collapsible": False,
+                "items": [
+                    {
+                        "title": _("All Users"),
+                        "icon": "person",
+                        "link": reverse_lazy("admin:users_user_changelist"),
+                        "permission": lambda request: request.user.is_superuser,
+                    },
+                    {
+                        "title": _("Customer Profiles"),
+                        "icon": "account_circle",
+                        "link": reverse_lazy("admin:users_customerprofile_changelist"),
+                        "permission": lambda request: request.user.is_superuser,
+                    },
+                    {
+                        "title": _("Admin Profiles"),
+                        "icon": "admin_panel_settings",
+                        "link": reverse_lazy("admin:users_adminprofile_changelist"),
+                        "permission": lambda request: request.user.is_superuser,
+                    },
+
+
+                ]
+            },
+            {
+                "title": _("Shipping"),
+                "separator": True,
+                "collapsible": True,
+                "items": [
                     {
                         "title": _("Shipping Types"),
                         "icon": "local_shipping",  # Material Icon
@@ -364,18 +397,63 @@ UNFOLD = {
                         "permission": lambda request: request.user.is_superuser,
                     },
                     {
-                        "title": _("Bookings"),
+                        "title": _("Orders"),
                         "icon": "local_shipping",  # Material Icon
                         "link": reverse_lazy("admin:bookings_booking_changelist"),
                         "permission": lambda request: request.user.is_superuser,
                     },
                 ],
             },
+            {
+                "title": _("Drivers"),  # Parent item for submenu
+                "icon": "directions_car",  # Valid Material Icon
+                "link": "",  # Empty link for non-clickable parent
+                "separator": True,
+                "collapsible": True,
+                "items": [  # Nested sub-items (submenu)
+                    {
+                        "title": _("Profile"),
+                        "icon": "person",
+                        "link": reverse_lazy("admin:driver_driverprofile_changelist"),
+                        "permission": lambda request: request.user.is_superuser,
+                    },
+                    {
+                        "title": _("Document"),
+                        "icon": "document_search",
+                        "link": reverse_lazy("admin:driver_driverdocument_changelist"),
+                        "permission": lambda request: request.user.is_superuser,
+                    },
+                    {
+                        "title": _("Availability"),
+                        "icon": "do_not_disturb_off",
+                        "link": reverse_lazy("admin:driver_driveravailability_changelist"),
+                        "permission": lambda request: request.user.is_superuser,
+                    },
+                    {
+                        "title": _("Payout"),
+                        "icon": "payments",
+                        "link": reverse_lazy("admin:driver_driverpayout_changelist"),
+                        "permission": lambda request: request.user.is_superuser,
+                    },
+                    {
+                        "title": _("Ratings"),
+                        "icon": "reviews",
+                        "link": reverse_lazy("admin:driver_driverrating_changelist"),
+                        "permission": lambda request: request.user.is_superuser,
+                    },
+                    {
+                        "title": _("Invite"),
+                        "icon": "add",
+                        "link": reverse_lazy("admin:driver_driverinvite_changelist"),
+                        "permission": lambda request: request.user.is_superuser,
+                    },
+
+                ],
+            },
 
         ],
 
     },
-
 
     # "TABS": [
     #     {
@@ -392,9 +470,6 @@ UNFOLD = {
     #     },
     # ],
 }
-
-
-
 
 
 def environment_callback(request):
