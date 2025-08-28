@@ -20,7 +20,8 @@ class ShippingTypeSerializer(serializers.ModelSerializer):
 class ServiceTypeSerializer(serializers.ModelSerializer):
     class Meta:
         model = ServiceType
-        fields = ["id", "name", "description", "price", "created_at", "updated_at"]
+        fields = ["id", "name", "description",
+                  "price", "created_at", "updated_at"]
         read_only_fields = ["id", "created_at", "updated_at"]
 
 
@@ -61,12 +62,14 @@ class QuoteRequestSerializer(serializers.Serializer):
             raise serializers.ValidationError("Invalid service type ID")
         return value
 
+
 class FloatDecimalField(serializers.DecimalField):
     def to_representation(self, value):
         if value is None:
             return None
         return float(value)
-    
+
+
 class QuoteSerializer(serializers.ModelSerializer):
     # Nested serializers for read
     shipping_type = ShippingTypeSerializer(read_only=True)
@@ -77,7 +80,7 @@ class QuoteSerializer(serializers.ModelSerializer):
         write_only=True, required=False, allow_null=True)
     service_type_id = serializers.UUIDField(
         write_only=True, required=False, allow_null=True)
-    
+
     # Use FloatDecimalField for all Decimal fields
     final_price = FloatDecimalField(max_digits=10, decimal_places=2)
     base_price = FloatDecimalField(max_digits=10, decimal_places=2)
@@ -163,6 +166,9 @@ class BookingCreateSerializer(serializers.ModelSerializer):
 
     def validate(self, data):
         user = self.context["request"].user if self.context["request"].user.is_authenticated else None
+        if user and data.get("guest_email"):
+            raise serializers.ValidationError(
+                "guest_email should not be provided for authenticated users")
         if not user and not data.get("guest_email"):
             raise serializers.ValidationError(
                 "guest_email is required for unauthenticated users")
