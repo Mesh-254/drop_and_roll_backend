@@ -349,7 +349,7 @@ UNFOLD = {
             {
                 "title": _("Users"),
                 "separator": True,
-                "collapsible": False,
+                "collapsible": True,
                 "items": [
                     {
                         "title": _("All Users"),
@@ -369,7 +369,6 @@ UNFOLD = {
                         "link": reverse_lazy("admin:users_adminprofile_changelist"),
                         "permission": lambda request: request.user.is_superuser,
                     },
-
 
                 ]
             },
@@ -401,6 +400,12 @@ UNFOLD = {
                         "icon": "local_shipping",  # Material Icon
                         "link": reverse_lazy("admin:bookings_booking_changelist"),
                         "permission": lambda request: request.user.is_superuser,
+                    },
+                    {
+                        "title": "Bulk Driver Assignment",
+                        "icon": "assignment",  # Material Icon (adjust as needed)
+                        "link": reverse_lazy("admin:booking_booking_bulk_assign_drivers"),
+                        "permissions": ["booking.change_booking"],  # Restrict access
                     },
                 ],
             },

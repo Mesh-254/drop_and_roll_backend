@@ -1,0 +1,25 @@
+{% extends "admin/base_site.html" %}
+{% load i18n admin_urls %}
+
+{% block content %}
+<div id="content-main">
+  <form action="" method="post">
+    {% csrf_token %}
+    <div>
+      <p>{% trans "Are you sure you want to assign a driver to the selected bookings?" %}</p>
+      <ul>
+        {% for booking in bookings %}
+          <li>{{ booking }}</li>
+        {% endfor %}
+      </ul>
+      {{ form.as_p }}
+      {% for obj in bookings %}
+        <input type="hidden" name="{{ action_checkbox_name }}" value="{{ obj.pk }}" />
+      {% endfor %}
+      <input type="hidden" name="action" value="assign_driver" />
+      <input type="hidden" name="post" value="yes" />
+      <input type="submit" name="apply" value="{% trans 'Apply' %}" />
+    </div>
+  </form>
+</div>
+{% endblock %}

@@ -2,7 +2,13 @@ from django.contrib import admin
 from django.utils.html import format_html
 from unfold.admin import ModelAdmin
 from .models import Address, Quote, Booking, ShippingType, ServiceType, RecurringSchedule, BulkUpload
-
+from django import forms
+from django.http import HttpResponseRedirect
+from django.shortcuts import render
+from django.urls import path
+from django.contrib import messages
+from users.models import DriverProfile
+import uuid
 
 @admin.register(Address)
 class AddressAdmin(ModelAdmin):
@@ -30,7 +36,7 @@ class QuoteAdmin(ModelAdmin):
 
 @admin.register(Booking)
 class BookingAdmin(ModelAdmin):
-    list_display = ("id", "get_customer_name", "get_service_type_name",
+    list_display = ("id", "get_customer_name", "get_service_type_name","get_driver_name",
                     "status_badge", "final_price", "created_at")
     list_filter = ("status", "quote__service_type__name", "created_at")
     search_fields = ("id", "customer__email",
@@ -44,6 +50,10 @@ class BookingAdmin(ModelAdmin):
     def get_service_type_name(self, obj):
         return obj.quote.service_type.name if obj.quote and obj.quote.service_type else "N/A"
     get_service_type_name.short_description = "Service Type"
+
+    def get_driver_name(self, obj):
+        return obj.driver.user.full_name if obj.driver and obj.driver.user else "Unassigned"
+    get_driver_name.short_description = "Driver"
 
     def status_badge(self, obj):
         color = {
@@ -59,6 +69,71 @@ class BookingAdmin(ModelAdmin):
         return format_html('<span style="padding:4px 8px;border-radius:9999px;color:#fff;background:{}">{}</span>',
                            color, obj.get_status_display())
     status_badge.short_description = "Status"
+
+    # Custom bulk action for assigning driver
+    actions = ["assign_driver"]
+    def assign_driver(self, request, queryset):
+        class AssignDriverForm(forms.Form):
+            driver = forms.ModelChoiceField(
+                queryset=DriverProfile.objects.all().order_by("user__full_name"),  # Adjust ordering as needed
+                label="Select Driver",
+                required=True
+            )
+
+        if "apply" in request.POST:
+            form = AssignDriverForm(request.POST)
+            if form.is_valid():
+                driver = form.cleaned_data["driver"]
+                updated_count = queryset.update(driver=driver)
+                self.message_user(request, f"Assigned {driver} to {updated_count} bookings.", level="success")
+                return HttpResponseRedirect(".")
+        else:
+            form = AssignDriverForm()
+
+        return render(request, "admin/assign_driver_intermediate.html", {
+            "title": "Assign Driver to Selected Bookings",
+            "bookings": queryset,
+            "form": form,
+            "opts": self.model._meta,
+            "action_checkbox_name": admin.helpers.ACTION_CHECKBOX_NAME,
+        })
+
+    assign_driver.short_description = "Assign driver to selected bookings"
+
+    # Custom URL for dedicated bulk assignment page
+    def get_urls(self):
+        urls = super().get_urls()
+        custom_urls = [
+            path("bulk-assign-drivers/", self.admin_site.admin_view(self.bulk_assign_drivers_view),
+                 name="booking_booking_bulk_assign_drivers"),
+        ]
+        return custom_urls + urls
+
+    def bulk_assign_drivers_view(self, request):
+        if request.method == "POST":
+            driver_id = request.POST.get("driver")
+            booking_ids = request.POST.get("booking_ids", "").split(",")
+            try:
+                driver = DriverProfile.objects.get(id=driver_id)
+                cleaned_ids = [uuid.UUID(bid.strip()) for bid in booking_ids if bid.strip()]
+                bookings = Booking.objects.filter(id__in=cleaned_ids)
+                updated_count = bookings.update(driver=driver)
+                messages.success(request, f"Assigned {driver} to {updated_count} bookings.")
+            except ValueError:
+                messages.error(request, "Invalid booking IDs provided (must be valid UUIDs).")
+            except DriverProfile.DoesNotExist:
+                messages.error(request, "Selected driver does not exist.")
+            except Exception as e:
+                messages.error(request, f"Error: {str(e)}")
+            return HttpResponseRedirect(".")
+
+        # GET: Render form
+        drivers = DriverProfile.objects.all().order_by("user__full_name")  # Adjust ordering
+        return render(request, "admin/bulk_assign_drivers.html", {
+            "title": "Bulk Assign Drivers",
+            "drivers": drivers,
+            "opts": self.model._meta,
+        })
 
 
 @admin.register(ShippingType)

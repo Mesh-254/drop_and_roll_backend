@@ -1,0 +1,25 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block content %}
+<div id="content-main">
+  <h1>Bulk Assign Drivers</h1>
+  <form method="post">
+    {% csrf_token %}
+    <div>
+      <label for="driver">Select Driver:</label>
+      <select name="driver" id="driver" required>
+        <option value="">-- Select --</option>
+        {% for driver in drivers %}
+          <option value="{{ driver.id }}">{{ driver }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label for="booking_ids">Booking IDs (comma-separated UUIDs):</label>
+      <textarea name="booking_ids" id="booking_ids" rows="5" required placeholder="e.g., 123e4567-e89b-12d3-a456-426614174000, another-uuid"></textarea>
+    </div>
+    <input type="submit" value="Assign Driver" />
+  </form>
+</div>
+{% endblock %}
