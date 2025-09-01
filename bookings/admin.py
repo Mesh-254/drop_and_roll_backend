@@ -7,7 +7,7 @@ from django.http import HttpResponseRedirect
 from django.shortcuts import render
 from django.urls import path
 from django.contrib import messages
-from users.models import DriverProfile
+from driver.models import DriverProfile
 import uuid
 
 @admin.register(Address)
@@ -72,10 +72,11 @@ class BookingAdmin(ModelAdmin):
 
     # Custom bulk action for assigning driver
     actions = ["assign_driver"]
+
     def assign_driver(self, request, queryset):
         class AssignDriverForm(forms.Form):
             driver = forms.ModelChoiceField(
-                queryset=DriverProfile.objects.all().order_by("user__full_name"),  # Adjust ordering as needed
+                queryset=DriverProfile.objects.filter(status="active").order_by("user__full_name"),
                 label="Select Driver",
                 required=True
             )
@@ -84,9 +85,25 @@ class BookingAdmin(ModelAdmin):
             form = AssignDriverForm(request.POST)
             if form.is_valid():
                 driver = form.cleaned_data["driver"]
-                updated_count = queryset.update(driver=driver)
-                self.message_user(request, f"Assigned {driver} to {updated_count} bookings.", level="success")
+                # Only update bookings in 'pending' or 'scheduled' status
+                valid_statuses = ["pending", "scheduled"]
+                valid_queryset = queryset.filter(status__in=valid_statuses)
+                updated_count = valid_queryset.update(driver=driver)
+                if updated_count > 0:
+                    self.message_user(
+                        request,
+                        f"Assigned {driver.user.full_name} to {updated_count} booking{'s' if updated_count > 1 else ''}.",
+                        level="success"
+                    )
+                else:
+                    self.message_user(
+                        request,
+                        "No bookings were updated. Ensure selected bookings are in 'pending' or 'scheduled' status.",
+                        level="warning"
+                    )
                 return HttpResponseRedirect(".")
+            else:
+                self.message_user(request, "Invalid driver selection.", level="error")
         else:
             form = AssignDriverForm()
 
@@ -100,7 +117,6 @@ class BookingAdmin(ModelAdmin):
 
     assign_driver.short_description = "Assign driver to selected bookings"
 
-    # Custom URL for dedicated bulk assignment page
     def get_urls(self):
         urls = super().get_urls()
         custom_urls = [
@@ -114,21 +130,23 @@ class BookingAdmin(ModelAdmin):
             driver_id = request.POST.get("driver")
             booking_ids = request.POST.get("booking_ids", "").split(",")
             try:
-                driver = DriverProfile.objects.get(id=driver_id)
+                driver = DriverProfile.objects.get(id=driver_id, status="active")
                 cleaned_ids = [uuid.UUID(bid.strip()) for bid in booking_ids if bid.strip()]
-                bookings = Booking.objects.filter(id__in=cleaned_ids)
+                bookings = Booking.objects.filter(id__in=cleaned_ids, status__in=["pending", "scheduled"])
                 updated_count = bookings.update(driver=driver)
-                messages.success(request, f"Assigned {driver} to {updated_count} bookings.")
+                messages.success(
+                    request,
+                    f"Assigned {driver.user.full_name} to {updated_count} booking{'s' if updated_count > 1 else ''}."
+                )
             except ValueError:
                 messages.error(request, "Invalid booking IDs provided (must be valid UUIDs).")
             except DriverProfile.DoesNotExist:
-                messages.error(request, "Selected driver does not exist.")
+                messages.error(request, "Selected driver does not exist or is not active.")
             except Exception as e:
                 messages.error(request, f"Error: {str(e)}")
             return HttpResponseRedirect(".")
 
-        # GET: Render form
-        drivers = DriverProfile.objects.all().order_by("user__full_name")  # Adjust ordering
+        drivers = DriverProfile.objects.filter(status="active").order_by("user__full_name")
         return render(request, "admin/bulk_assign_drivers.html", {
             "title": "Bulk Assign Drivers",
             "drivers": drivers,

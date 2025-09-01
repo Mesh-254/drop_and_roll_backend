@@ -2,16 +2,20 @@ from decimal import Decimal
 
 from django.utils import timezone
 from rest_framework import viewsets, mixins
+from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated,AllowAny
 from rest_framework.response import Response
 
 from driver.models import (
-    DriverAvailability, DriverPayout, DriverRating,
+    DriverAvailability, DriverPayout, DriverRating, DriverDocument,
 )
 from driver.serializers import (
     DriverAvailabilitySerializer,
     DriverPayoutSerializer, DriverPayoutCreateSerializer,
-    DriverRatingSerializer,
+    DriverRatingSerializer, DriverDocumentSerializer, DriverInviteCreateSerializer, DriverInviteDetailSerializer,
+    DriverInviteAcceptSerializer,
 )
+from users.serializers import UserSerializer
 from .permissions import IsAdmin, IsDriver, IsCustomer
 
 
@@ -125,3 +129,43 @@ class DriverRatingViewSet(mixins.CreateModelMixin,
         profile.rating_avg = new_avg.quantize(Decimal("0.01"))
         profile.save(update_fields=["rating_count", "rating_avg"])
         return Response(DriverRatingSerializer(rating).data, status=201)
+
+
+class DriverDocumentViewSet(
+    mixins.CreateModelMixin,
+    mixins.ListModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet
+):
+    serializer_class = DriverDocumentSerializer
+    permission_classes = [IsAuthenticated, IsDriver]
+
+    def get_queryset(self):
+        if getattr(self, 'swagger_fake_view', False):
+            return DriverDocument.objects.none()
+        user = self.request.user
+        if hasattr(user, "driver_profile"):
+            return user.driver_profile.documents.all()
+        return DriverDocument.objects.none()
+
+
+class DriverInviteViewSet(mixins.CreateModelMixin,
+                          mixins.ListModelMixin,
+                          viewsets.GenericViewSet):
+    permission_classes = [IsAuthenticated, IsAdmin]
+
+    def get_queryset(self):
+        from .models import DriverInvitation
+        return DriverInvitation.objects.all().order_by("-expires_at")
+
+    def get_serializer_class(self):
+        if self.action == "create":
+            return DriverInviteCreateSerializer
+        return DriverInviteDetailSerializer
+
+    @action(methods=["post"], detail=False, url_path="accept", permission_classes=[AllowAny])
+    def accept(self, request):
+        s = DriverInviteAcceptSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        user = s.save()
+        return Response(UserSerializer(user).data, status=201)

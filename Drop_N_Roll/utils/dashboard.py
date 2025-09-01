@@ -4,7 +4,7 @@ from django.db.models import Sum, Count
 from django.utils import timezone
 from django.contrib.auth import get_user_model
 from bookings.models import Booking, Quote, ServiceType, ShippingType, RecurringSchedule
-from users.models import DriverProfile
+from driver.models import DriverProfile
 
 User = get_user_model()
 
