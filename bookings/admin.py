@@ -8,6 +8,8 @@ from django.shortcuts import render
 from django.urls import path
 from django.contrib import messages
 from driver.models import DriverProfile
+from unfold.views import UnfoldModelAdminViewMixin
+from django.views.generic import TemplateView
 import uuid
 
 @admin.register(Address)
@@ -85,20 +87,20 @@ class BookingAdmin(ModelAdmin):
             form = AssignDriverForm(request.POST)
             if form.is_valid():
                 driver = form.cleaned_data["driver"]
-                # Only update bookings in 'pending' or 'scheduled' status
-                valid_statuses = ["pending", "scheduled"]
+                # Only update bookings in 'scheduled' status and change to 'assigned'
+                valid_statuses = ["scheduled"]
                 valid_queryset = queryset.filter(status__in=valid_statuses)
-                updated_count = valid_queryset.update(driver=driver)
+                updated_count = valid_queryset.update(driver=driver, status="assigned")
                 if updated_count > 0:
                     self.message_user(
                         request,
-                        f"Assigned {driver.user.full_name} to {updated_count} booking{'s' if updated_count > 1 else ''}.",
+                        f"Assigned {driver.user.full_name} to {updated_count} booking{'s' if updated_count > 1 else ''} and updated status to 'Assigned'.",
                         level="success"
                     )
                 else:
                     self.message_user(
                         request,
-                        "No bookings were updated. Ensure selected bookings are in 'pending' or 'scheduled' status.",
+                        "No bookings were updated. Ensure selected bookings are in 'scheduled' status.",
                         level="warning"
                     )
                 return HttpResponseRedirect(".")
@@ -115,43 +117,47 @@ class BookingAdmin(ModelAdmin):
             "action_checkbox_name": admin.helpers.ACTION_CHECKBOX_NAME,
         })
 
-    assign_driver.short_description = "Assign driver to selected bookings"
+    assign_driver.short_description = "Assign driver to selected bookings (Scheduled only)"
 
     def get_urls(self):
         urls = super().get_urls()
+        custom_view = self.admin_site.admin_view(
+            BulkAssignDriversView.as_view(model_admin=self)
+        )
         custom_urls = [
-            path("bulk-assign-drivers/", self.admin_site.admin_view(self.bulk_assign_drivers_view),
-                 name="booking_booking_bulk_assign_drivers"),
+            path("bulk-assign-drivers/", custom_view, name="booking_booking_bulk_assign_drivers"),
         ]
         return custom_urls + urls
 
-    def bulk_assign_drivers_view(self, request):
-        if request.method == "POST":
-            driver_id = request.POST.get("driver")
-            booking_ids = request.POST.get("booking_ids", "").split(",")
-            try:
-                driver = DriverProfile.objects.get(id=driver_id, status="active")
-                cleaned_ids = [uuid.UUID(bid.strip()) for bid in booking_ids if bid.strip()]
-                bookings = Booking.objects.filter(id__in=cleaned_ids, status__in=["pending", "scheduled"])
-                updated_count = bookings.update(driver=driver)
-                messages.success(
-                    request,
-                    f"Assigned {driver.user.full_name} to {updated_count} booking{'s' if updated_count > 1 else ''}."
-                )
-            except ValueError:
-                messages.error(request, "Invalid booking IDs provided (must be valid UUIDs).")
-            except DriverProfile.DoesNotExist:
-                messages.error(request, "Selected driver does not exist or is not active.")
-            except Exception as e:
-                messages.error(request, f"Error: {str(e)}")
-            return HttpResponseRedirect(".")
 
-        drivers = DriverProfile.objects.filter(status="active").order_by("user__full_name")
-        return render(request, "admin/bulk_assign_drivers.html", {
-            "title": "Bulk Assign Drivers",
-            "drivers": drivers,
-            "opts": self.model._meta,
-        })
+class BulkAssignDriversView(UnfoldModelAdminViewMixin, TemplateView):
+    title = "Bulk Assign Drivers"
+    permission_required = ("bookings.change_booking",)
+    template_name = "admin/bulk_assign_drivers.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["drivers"] = DriverProfile.objects.filter(status="active").order_by("user__full_name")
+        context["bookings"] = Booking.objects.filter(status="scheduled").order_by("-created_at")
+        context["opts"] = Booking._meta
+        return context
+
+    def post(self, request, *args, **kwargs):
+        driver_id = request.POST.get("driver")
+        booking_ids = request.POST.getlist("booking_ids")  # Get list of selected booking IDs
+        try:
+            driver = DriverProfile.objects.get(id=driver_id, status="active")
+            bookings = Booking.objects.filter(id__in=booking_ids, status="scheduled")
+            updated_count = bookings.update(driver=driver, status="assigned")
+            messages.success(
+                request,
+                f"Assigned {driver.user.full_name} to {updated_count} booking{'s' if updated_count > 1 else ''} and updated status to 'Assigned'."
+            )
+        except DriverProfile.DoesNotExist:
+            messages.error(request, "Selected driver does not exist or is not active.")
+        except Exception as e:
+            messages.error(request, f"Error: {str(e)}")
+        return HttpResponseRedirect(".")
 
 
 @admin.register(ShippingType)

@@ -1,25 +1,48 @@
-{% extends "admin/base_site.html" %}
-{% load i18n admin_urls %}
+{% extends "unfold/layouts/base.html" %}
+{% load i18n unfold static %}
+
+{% block extrastyle %}
+    <link rel="stylesheet" href="{% static 'css/style.css' %}">
+    <link rel="stylesheet" href="{% static 'css/material-icons.css' %}">
+{% endblock %}
+
+{% block breadcrumbs %}
+    <div class="text-sm text-gray-500 dark:text-gray-400">
+        <a href="{% url 'admin:index' %}" class="hover:text-primary-500">{% trans "Home" %}</a>
+        &raquo;
+        <a href="{% url 'admin:bookings_booking_changelist' %}" class="hover:text-primary-500">{{ opts.verbose_name_plural|capfirst }}</a>
+        &raquo;
+        <span>{% trans "Assign Driver" %}</span>
+    </div>
+{% endblock %}
 
 {% block content %}
-<div id="content-main">
-  <form action="" method="post">
-    {% csrf_token %}
-    <div>
-      <p>{% trans "Are you sure you want to assign a driver to the selected bookings?" %}</p>
-      <ul>
-        {% for booking in bookings %}
-          <li>{{ booking }}</li>
-        {% endfor %}
-      </ul>
-      {{ form.as_p }}
-      {% for obj in bookings %}
-        <input type="hidden" name="{{ action_checkbox_name }}" value="{{ obj.pk }}" />
-      {% endfor %}
-      <input type="hidden" name="action" value="assign_driver" />
-      <input type="hidden" name="post" value="yes" />
-      <input type="submit" name="apply" value="{% trans 'Apply' %}" />
+    <div class="max-w-4xl mx-auto bg-white dark:bg-gray-800 p-6 rounded-lg shadow-md">
+        <h1 class="text-2xl font-bold mb-4 text-gray-900 dark:text-gray-100">{{ title }}</h1>
+        <p class="mb-4 text-gray-600 dark:text-gray-300">{% trans "Are you sure you want to assign a driver to the selected" %} {{ opts.verbose_name_plural|capfirst }}? {% trans "All of the following objects will be affected:" %}</p>
+
+        <ul class="list-disc pl-5 mb-6 text-gray-800 dark:text-gray-200">
+            {% for obj in bookings %}
+                <li>{{ obj|capfirst }}</li>
+            {% endfor %}
+        </ul>
+
+        <form method="post" class="space-y-4">
+            {% csrf_token %}
+            {% if form.errors %}
+                <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-md mb-4">
+                    {% for field, errors in form.errors.items %}
+                        {{ errors|join:", " }}
+                    {% endfor %}
+                </div>
+            {% endif %}
+            <div class="mb-4">
+                {{ form.as_p }}
+            </div>
+            <div class="flex justify-end space-x-4">
+                <button type="submit" name="apply" class="bg-primary-500 text-white px-4 py-2 rounded-md hover:bg-primary-600 dark:hover:bg-primary-700 transition-colors">{% trans "Yes, I'm sure" %}</button>
+                <a href="{% url 'admin:bookings_booking_changelist' %}" class="bg-gray-300 dark:bg-gray-600 text-gray-800 dark:text-gray-200 px-4 py-2 rounded-md hover:bg-gray-400 dark:hover:bg-gray-500 transition-colors">{% trans "No, take me back" %}</a>
+            </div>
+        </form>
     </div>
-  </form>
-</div>
 {% endblock %}
