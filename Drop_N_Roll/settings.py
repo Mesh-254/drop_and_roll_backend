@@ -141,7 +141,8 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
 STATIC_URL = 'static/'
-STATIC_ROOT = BASE_DIR / 'staticfiles'  # New: Directory for collected static files
+# New: Directory for collected static files
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 # STATICFILES_DIRS = [
 #     BASE_DIR / 'static',  # Optional: Directory for project-specific static files
 # ]
@@ -225,6 +226,19 @@ GOOGLE_CLIENT_SECRET = env("CLIENT_SECRET")
 SOCIAL_AUTH_JSONFIELD_ENABLED = True
 SOCIAL_AUTH_USER_MODEL = 'users.User'
 
+# paypal payment
+# Use 'https://api-m.paypal.com' for live
+PAYPAL_API_URL = env(
+    "PAYPAL_API_URL", default='https://api-m.sandbox.paypal.com')
+PAYPAL_CLIENT_ID = env("PAYPAL_CLIENT_ID")  # From PayPal Developer Dashboard
+# From PayPal Developer Dashboard
+PAYPAL_CLIENT_SECRET = env("PAYPAL_CLIENT_SECRET")
+# From PayPal Dashboard > Webhooks
+PAYPAL_WEBHOOK_ID = env("PAYPAL_WEBHOOK_ID")
+
+PAYPAL_RETURN_URL = env("PAYPAL_RETURN_URL")
+PAYPAL_CANCEL_URL = env("PAYPAL_CANCEL_URL")
+
 # ADMIN SITE CUSTOMIZATION SETTINGS WITH UNFOLD
 UNFOLD = {
     "SITE_TITLE": "Drop N Roll Administration",
@@ -263,7 +277,8 @@ UNFOLD = {
     ],
     "SHOW_HISTORY": True,  # show/hide "History" button, default: True
     "SHOW_VIEW_ON_SITE": True,  # show/hide "View on site" button, default: True
-    "SHOW_BACK_BUTTON": False,  # show/hide "Back" button on changeform in header, default: False
+    # show/hide "Back" button on changeform in header, default: False
+    "SHOW_BACK_BUTTON": False,
     # "ENVIRONMENT": "sample_app.environment_callback", # environment name in header
     # "ENVIRONMENT_TITLE_PREFIX": "sample_app.environment_title_prefix_callback", # environment name prefix in title tag
     # "DASHBOARD_CALLBACK": "sample_app.dashboard_callback",
