@@ -170,6 +170,12 @@ class Booking(models.Model):
     discount_applied = models.DecimalField(
         max_digits=10, decimal_places=2, default=0)
 
+    # prevent double payment and impotency
+    payment_expires_at = models.DateTimeField(blank=True, null=True)
+    payment_attempts = models.PositiveIntegerField(default=0)
+    tracking_number = models.CharField(
+        max_length=20, unique=True, blank=True, null=True)
+
     class Meta:
         indexes = [
             models.Index(fields=["status"]),
