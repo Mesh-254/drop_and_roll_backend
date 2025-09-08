@@ -11,6 +11,8 @@ from driver.models import DriverProfile
 from unfold.views import UnfoldModelAdminViewMixin
 from django.views.generic import TemplateView
 import uuid
+from django.core.paginator import Paginator
+
 
 @admin.register(Address)
 class AddressAdmin(ModelAdmin):
@@ -137,8 +139,12 @@ class BulkAssignDriversView(UnfoldModelAdminViewMixin, TemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+        bookings = Booking.objects.filter(status="scheduled").order_by("-created_at")
+        paginator = Paginator(bookings, 15)  # 25 bookings per page
+        page_number = self.request.GET.get("page")
+        page_obj = paginator.get_page(page_number)
         context["drivers"] = DriverProfile.objects.filter(status="active").order_by("user__full_name")
-        context["bookings"] = Booking.objects.filter(status="scheduled").order_by("-created_at")
+        context["bookings"] = page_obj  # Pass page_obj as bookings
         context["opts"] = Booking._meta
         return context
 

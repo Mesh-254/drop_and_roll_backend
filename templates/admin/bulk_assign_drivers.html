@@ -102,6 +102,36 @@
                 </table>
             </div>
 
+
+            {% if bookings.has_other_pages %}
+                <div class="mt-6 flex justify-between items-center">
+                    <div>
+                        <span class="text-sm text-gray-700 dark:text-gray-300">
+                            Showing {{ bookings.start_index }} to {{ bookings.end_index }} of {{ bookings.paginator.count }} entries
+                        </span>
+                    </div>
+                <div class="flex space-x-2">
+                        {% if bookings.has_previous %}
+                            <a href="?page={{ bookings.previous_page_number }}" class="px-4 py-2 bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500 transition-colors">Previous</a>
+                        {% else %}
+                            <span class="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-400 rounded-md cursor-not-allowed">Previous</span>
+                        {% endif %}
+                        {% for num in bookings.paginator.page_range %}
+                            {% if num == bookings.number %}
+                                <span class="px-4 py-2 bg-primary-500 text-white rounded-md">{{ num }}</span>
+                            {% else %}
+                                <a href="?page={{ num }}" class="px-4 py-2 bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500 transition-colors">{{ num }}</a>
+                            {% endif %}
+                        {% endfor %}
+                        {% if bookings.has_next %}
+                            <a href="?page={{ bookings.next_page_number }}" class="px-4 py-2 bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500 transition-colors">Next</a>
+                        {% else %}
+                            <span class="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-400 rounded-md cursor-not-allowed">Next</span>
+                        {% endif %}
+                    </div>
+              {% endif %}
+
+
             <div class="flex justify-end space-x-4">
                 <button type="submit" class="bg-primary-500 text-white px-4 py-2 rounded-md hover:bg-primary-600 dark:hover:bg-primary-700 transition-colors">{% trans "Assign Driver" %}</button>
                 <a href="{% url 'admin:bookings_booking_changelist' %}" class="bg-gray-300 dark:bg-gray-600 text-gray-800 dark:text-gray-200 px-4 py-2 rounded-md hover:bg-gray-400 dark:hover:bg-gray-500 transition-colors">{% trans "Cancel" %}</a>
