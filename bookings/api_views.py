@@ -1,13 +1,21 @@
 from decimal import Decimal
 
-from drf_yasg import openapi
-from drf_yasg.utils import swagger_auto_schema
-from rest_framework import viewsets, status
-from rest_framework.decorators import action
-from rest_framework.permissions import IsAuthenticated, IsAuthenticatedOrReadOnly
-from rest_framework.response import Response
-from rest_framework.permissions import AllowAny
-from django.db.transaction import atomic
+from drf_yasg import openapi  # type: ignore
+from drf_yasg.utils import swagger_auto_schema  # type: ignore
+from .tasks import send_booking_confirmation_email, send_reminder
+from rest_framework import viewsets, status  # type: ignore
+from rest_framework.decorators import action  # type: ignore
+from rest_framework.permissions import IsAuthenticated, IsAuthenticatedOrReadOnly  # type: ignore
+from rest_framework.response import Response  # type: ignore
+from rest_framework.permissions import AllowAny  # type: ignore
+from django.db.transaction import atomic  # type: ignore
+
+from django.core.exceptions import ValidationError  # type: ignore
+import uuid
+import shortuuid  # type: ignore
+from django.utils import timezone  # type: ignore
+from payments.models import PaymentTransaction, PaymentStatus
+from payments.serializers import PaymentTransactionSerializer
 
 from .models import Quote, Booking, RecurringSchedule, BookingStatus, ShippingType, ServiceType
 from .permissions import IsCustomer, IsAdminOrReadOnly
@@ -75,8 +83,34 @@ class BookingViewSet(viewsets.ModelViewSet):
     serializer_class = BookingSerializer
     permission_classes = [AllowAny]
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = self.request.user
+        guest_email = self.request.query_params.get("guest_email", "").lower()
+
+        if user.is_authenticated:
+            role = getattr(user, "role", None)
+            if role == "customer":
+                return qs.filter(customer=user)
+            if role == "driver":
+                return qs.filter(driver__user=user)
+            if role == "admin":
+                return qs
+        elif guest_email:
+            # Allow guests to access bookings with matching guest_email
+            return qs.filter(guest_email=guest_email.lower())
+
+        # Default: return empty queryset for unauthenticated users without guest_email
+        return qs.none()
+
+    def get_object(self):
+        # Use get_queryset to ensure proper filtering
+        queryset = self.get_queryset()
+        obj = super().get_object()  # This will raise 404 if no object is found
+        return obj
+
     def get_permissions(self):
-        if self.action in ["create", "by_guest", "bulk_upload", "recurring_list", "recurring_create"]:
+        if self.action in ["create", "by_guest", "bulk_upload", "recurring_list", "recurring_create", "retrieve"]:
             return [AllowAny()]
         if self.action in ["update", "partial_update", "destroy", "assign_driver", "set_status"]:
             return [IsAdminOrReadOnly()]
@@ -89,19 +123,54 @@ class BookingViewSet(viewsets.ModelViewSet):
 
     @atomic
     def perform_create(self, serializer):
-        serializer.save()
-
-    def get_queryset(self):
-        qs = super().get_queryset()
         user = self.request.user
-        if not user.is_authenticated:
-            return qs.none()
-        role = getattr(user, "role", None)
-        if role == "customer":
-            return qs.filter(customer=user)
-        if role == "driver":
-            return qs.filter(driver__user=user)
-        return qs
+        guest_email = serializer.validated_data.get("guest_email")
+
+        # Check for pending bookings to enforce anti-spam limit
+        pending_count = 0
+        if user.is_authenticated:
+            pending_count = Booking.objects.filter(
+                customer=user, status=BookingStatus.PENDING
+            ).count()
+        elif guest_email:
+            pending_count = Booking.objects.filter(
+                guest_email=guest_email, customer__isnull=True, status=BookingStatus.PENDING
+            ).count()
+
+        if pending_count >= 5:  # Anti-spam limit
+            raise ValidationError("Too many pending bookings.")
+
+        # Save the booking using serializer's logic
+        booking = serializer.save(status=BookingStatus.PENDING,
+                                  payment_expires_at=timezone.now() + timezone.timedelta(days=1))
+
+        # Handle free bookings (final_price <= 0)
+        if booking.final_price <= 0:
+            booking.status = BookingStatus.SCHEDULED
+            booking.tracking_number = f"BK-{shortuuid.uuid()[:6].upper()}"
+            booking.save()
+            send_booking_confirmation_email.delay(booking.id)
+            return
+
+        # Create payment transaction for non-free bookings
+        user = booking.customer  # None for guests
+        guest_email = booking.guest_email.lower() if not user else None
+        tx = PaymentTransaction.objects.create(
+            user=user,
+            guest_email=guest_email,
+            booking=booking,
+            amount=booking.final_price,
+            status=PaymentStatus.PENDING,
+            reference=str(uuid.uuid4())[:12].replace("-", "")
+        )
+
+        # send_reminder.delay(booking.id, tx.reference, is_initial=True)
+        self.tx_data = PaymentTransactionSerializer(tx).data
+
+    def create(self, request, *args, **kwargs):
+        super().create(request, *args, **kwargs)
+        # Returns tx for redirect
+        return Response(self.tx_data, status=status.HTTP_201_CREATED)
 
     @swagger_auto_schema(
         method="post",
@@ -212,7 +281,7 @@ class ShippingTypeViewSet(viewsets.ModelViewSet):
 class ServiceTypeViewSet(viewsets.ModelViewSet):
     queryset = ServiceType.objects.all()
     serializer_class = ServiceTypeSerializer
-    
+
     def get_permissions(self):
         if self.action in ["list", "retrieve"]:  # anyone can read
             return [IsAuthenticatedOrReadOnly()]
