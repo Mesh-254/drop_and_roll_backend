@@ -1,35 +1,31 @@
-from django.contrib.auth import get_user_model
-from rest_framework import viewsets, mixins, status
-from rest_framework.decorators import action
-from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated, AllowAny
-from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
-from django.utils.encoding import force_str
-from django.contrib.auth.tokens import default_token_generator
 from django.conf import settings
-from .tasks import send_confirmation_email
+from django.contrib.auth import get_user_model
+from django.contrib.auth.tokens import default_token_generator
 from django.utils.encoding import force_bytes
-from rest_framework_simplejwt.tokens import RefreshToken
-from rest_framework import serializers
-from rest_framework.views import APIView
-from google.oauth2 import id_token
+from django.utils.encoding import force_str
+from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token
+from rest_framework import serializers
+from rest_framework import viewsets, status
+from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from rest_framework_simplejwt.tokens import RefreshToken
 
-from .models import DriverDocument, CustomerProfile
 from .permissions import IsAdmin, IsDriver, IsCustomer
 from .serializers import (
     UserSerializer,
     RegisterSerializer,
     ChangePasswordSerializer,
     CustomerProfileSerializer,
-    DriverProfileSerializer,
+
     AdminProfileSerializer,
-    DriverDocumentSerializer,
-    DriverInviteCreateSerializer,
-    DriverInviteDetailSerializer,
-    DriverInviteAcceptSerializer,
+
     LoginSerializer,
 )
+from .tasks import send_confirmation_email
 
 User = get_user_model()
 
@@ -76,8 +72,8 @@ class GoogleLoginView(APIView):
 
             # If user exists but is not active, activate them
             if not user.is_active:
-                    user.is_active = True
-                    user.save()
+                user.is_active = True
+                user.save()
 
             # Generate JWT tokens
             refresh = RefreshToken.for_user(user)
@@ -301,7 +297,8 @@ class AuthViewSet(viewsets.GenericViewSet):
 class ProfileViewSet(viewsets.GenericViewSet):
     permission_classes = [IsAuthenticated]
 
-    @action(methods=["get", "patch"], detail=False, url_path="customer", permission_classes=[IsAuthenticated, IsCustomer])
+    @action(methods=["get", "patch"], detail=False, url_path="customer",
+            permission_classes=[IsAuthenticated, IsCustomer])
     def customer(self, request):
         profile = request.user.customer_profile
         if request.method == "PATCH":
@@ -336,43 +333,3 @@ class ProfileViewSet(viewsets.GenericViewSet):
         else:
             s = AdminProfileSerializer(profile)
         return Response(s.data)
-
-
-class DriverDocumentViewSet(
-    mixins.CreateModelMixin,
-    mixins.ListModelMixin,
-    mixins.DestroyModelMixin,
-    viewsets.GenericViewSet
-):
-    serializer_class = DriverDocumentSerializer
-    permission_classes = [IsAuthenticated, IsDriver]
-
-    def get_queryset(self):
-        if getattr(self, 'swagger_fake_view', False):
-            return DriverDocument.objects.none()
-        user = self.request.user
-        if hasattr(user, "driver_profile"):
-            return user.driver_profile.documents.all()
-        return DriverDocument.objects.none()
-
-
-class DriverInviteViewSet(mixins.CreateModelMixin,
-                          mixins.ListModelMixin,
-                          viewsets.GenericViewSet):
-    permission_classes = [IsAuthenticated, IsAdmin]
-
-    def get_queryset(self):
-        from .models import DriverInvitation
-        return DriverInvitation.objects.all().order_by("-expires_at")
-
-    def get_serializer_class(self):
-        if self.action == "create":
-            return DriverInviteCreateSerializer
-        return DriverInviteDetailSerializer
-
-    @action(methods=["post"], detail=False, url_path="accept", permission_classes=[AllowAny])
-    def accept(self, request):
-        s = DriverInviteAcceptSerializer(data=request.data)
-        s.is_valid(raise_exception=True)
-        user = s.save()
-        return Response(UserSerializer(user).data, status=201)

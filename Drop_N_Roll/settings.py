@@ -364,7 +364,7 @@ UNFOLD = {
             {
                 "title": _("Users"),
                 "separator": True,
-                "collapsible": False,
+                "collapsible": True,
                 "items": [
                     {
                         "title": _("All Users"),
@@ -378,13 +378,6 @@ UNFOLD = {
                         "link": reverse_lazy("admin:users_customerprofile_changelist"),
                         "permission": lambda request: request.user.is_superuser,
                     },
-                    {
-                        "title": _("Admin Profiles"),
-                        "icon": "admin_panel_settings",
-                        "link": reverse_lazy("admin:users_adminprofile_changelist"),
-                        "permission": lambda request: request.user.is_superuser,
-                    },
-
 
                 ]
             },
@@ -417,6 +410,12 @@ UNFOLD = {
                         "link": reverse_lazy("admin:bookings_booking_changelist"),
                         "permission": lambda request: request.user.is_superuser,
                     },
+                    {
+                        "title": "Bulk Driver Assignment",
+                        "icon": "assignment",  # Material Icon (adjust as needed)
+                        "link": reverse_lazy("admin:booking_booking_bulk_assign_drivers"),
+                        "permissions": ["booking.change_booking"],  # Restrict access
+                    },
                 ],
             },
             {
@@ -425,16 +424,16 @@ UNFOLD = {
                 "link": "",  # Empty link for non-clickable parent
                 "separator": True,
                 "collapsible": True,
-                "items": [  # Nested sub-items (submenu)
+                "items": [
                     {
-                        "title": _("Profile"),
-                        "icon": "person",
+                        "title": _("Driver Profiles"),
+                        "icon": "account_circle",
                         "link": reverse_lazy("admin:driver_driverprofile_changelist"),
                         "permission": lambda request: request.user.is_superuser,
                     },
                     {
-                        "title": _("Document"),
-                        "icon": "document_search",
+                        "title": _("Driver Documents"),
+                        "icon": "admin_panel_settings",
                         "link": reverse_lazy("admin:driver_driverdocument_changelist"),
                         "permission": lambda request: request.user.is_superuser,
                     },
@@ -456,13 +455,6 @@ UNFOLD = {
                         "link": reverse_lazy("admin:driver_driverrating_changelist"),
                         "permission": lambda request: request.user.is_superuser,
                     },
-                    {
-                        "title": _("Invite"),
-                        "icon": "add",
-                        "link": reverse_lazy("admin:driver_driverinvite_changelist"),
-                        "permission": lambda request: request.user.is_superuser,
-                    },
-
                 ],
             },
 

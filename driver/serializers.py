@@ -1,48 +1,14 @@
+from datetime import timedelta
+
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 from rest_framework import serializers
-from .models import (
-    DriverProfile, DriverDocument, DriverAvailability, DriverPayout, DriverRating, DriverInvite,
-    DocumentType, DocumentStatus, DriverStatus, PayoutStatus, InviteStatus
+
+from driver.models import (
+    DriverAvailability, DriverPayout, DriverRating, DriverDocument, DriverProfile, DriverInvitation
 )
 
 User = get_user_model()
-
-
-class DriverProfileSerializer(serializers.ModelSerializer):
-    email = serializers.EmailField(source="user.email", read_only=True)
-    full_name = serializers.CharField(source="user.full_name", read_only=True)
-
-    class Meta:
-        model = DriverProfile
-        fields = [
-            "id", "user", "email", "full_name", "vehicle_type", "license_number",
-            "is_verified", "status", "rating_avg", "rating_count", "created_at", "updated_at"
-        ]
-        read_only_fields = ["id", "user", "is_verified", "rating_avg", "rating_count", "created_at", "updated_at"]
-
-
-class DriverProfileUpdateSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = DriverProfile
-        fields = ["vehicle_type", "license_number"]
-
-
-# class DriverDocumentSerializer(serializers.ModelSerializer):
-#     class Meta:
-#         model = DriverDocument
-#         fields = ["id", "driver_profile", "document_type", "file", "status", "reason", "uploaded_at", "reviewed_at"]
-#         read_only_fields = ["status", "reason", "uploaded_at", "reviewed_at"]
-
-
-class DriverDocumentCreateSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = DriverDocument
-        fields = ["document_type", "file"]
-
-
-class DriverDocumentReviewSerializer(serializers.Serializer):
-    status = serializers.ChoiceField(choices=DocumentStatus.choices)
-    reason = serializers.CharField(max_length=255, required=False, allow_blank=True)
 
 
 class DriverAvailabilitySerializer(serializers.ModelSerializer):
@@ -79,58 +45,119 @@ class DriverRatingSerializer(serializers.ModelSerializer):
         return value
 
 
-class DriverInviteSerializer(serializers.ModelSerializer):
+class DriverProfileSerializer(serializers.ModelSerializer):
     class Meta:
-        model = DriverInvite
-        fields = ["id", "email", "invited_by", "token", "status", "sent_at", "accepted_at", "payload"]
-        read_only_fields = ["id", "token", "status", "sent_at", "accepted_at"]
+        model = DriverProfile
+        fields = [
+            "license_number",
+            "vehicle_type",
+            "vehicle_registration",
+            "is_verified",
+            "status",
+            "total_deliveries",
+            "rating",
+        ]
+        read_only_fields = ["is_verified", "total_deliveries", "rating"]
+
+
+class DriverDocumentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DriverDocument
+        fields = ["id", "doc_type", "file", "uploaded_at", "verified", "notes"]
+        read_only_fields = ["id", "uploaded_at", "verified"]
+
+
+class DriverInviteCreateSerializer(serializers.ModelSerializer):
+    expires_in_hours = serializers.IntegerField(
+        write_only=True, required=False, default=72)
+
+    class Meta:
+        model = DriverInvitation
+        fields = ["id", "email", "full_name", "expires_in_hours"]
+
+    def create(self, validated_data):
+        hours = validated_data.pop("expires_in_hours", 72)
+        inv = DriverInvitation.objects.create(
+            created_by=self.context["request"].user,
+            expires_at=timezone.now() + timedelta(hours=hours),
+            **validated_data,
+        )
+        return inv
+
+
+class DriverInviteDetailSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DriverInvitation
+        fields = ["id", "email", "full_name",
+                  "token", "expires_at", "accepted_at"]
 
 
 class DriverInviteAcceptSerializer(serializers.Serializer):
     token = serializers.UUIDField()
-    password = serializers.CharField(write_only=True, min_length=8)
+    password = serializers.CharField(min_length=8)
+    phone = serializers.CharField(required=False, allow_blank=True)
 
     def validate(self, attrs):
-        token = attrs["token"]
         try:
-            invite = DriverInvite.objects.get(token=token, status=InviteStatus.PENDING)
-        except DriverInvite.DoesNotExist:
-            raise serializers.ValidationError({"token": "Invalid or already used invite token"})
-        attrs["invite"] = invite
+            inv = DriverInvitation.objects.get(token=attrs["token"])
+        except DriverInvitation.DoesNotExist:
+            raise serializers.ValidationError("Invalid token")
+        if inv.accepted_at is not None:
+            raise serializers.ValidationError("Invitation already accepted")
+        if inv.is_expired():
+            raise serializers.ValidationError("Invitation expired")
+        attrs["invitation"] = inv
         return attrs
 
     def create(self, validated_data):
-        invite: DriverInvite = validated_data["invite"]
-        payload = invite.payload or {}
-        # Create or get user
-        user = User.objects.filter(email=invite.email).first()
-        if user is None:
-            user = User.objects.create_user(
-                email=invite.email,
-                full_name=payload.get("full_name", invite.email.split("@")[0]),
-                phone=payload.get("phone"),
-                role=getattr(User, "Role").DRIVER if hasattr(User, "Role") else "driver",
-                is_active=True,
-                password=validated_data["password"],
-            )
-        else:
-            user.set_password(validated_data["password"])
-            # Ensure role
-            if hasattr(User, "Role"):
-                user.role = User.Role.DRIVER
-            user.is_active = True
-            user.save(update_fields=["password", "is_active", "role"] if hasattr(User, "Role") else ["password", "is_active"])
-        # Ensure driver profile
-        profile, _ = DriverProfile.objects.get_or_create(
-            user=user,
-            defaults={
-                "vehicle_type": payload.get("vehicle_type", ""),
-                "license_number": payload.get("license_number", ""),
-                "status": DriverStatus.INACTIVE,
-            },
+        inv: DriverInvitation = validated_data["invitation"]
+        user = User.objects.create_user(
+            email=inv.email,
+            password=validated_data["password"],
+            full_name=inv.full_name,
+            phone=validated_data.get("phone"),
+            role=User.Role.DRIVER,
         )
-        # Mark invite accepted
-        invite.status = InviteStatus.ACCEPTED
-        invite.accepted_at = timezone.now()
-        invite.save(update_fields=["status", "accepted_at"])
-        return profile
+        inv.accepted_at = timezone.now()
+        inv.save(update_fields=["accepted_at"])
+        return user
+
+
+class DriverInviteSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    phone = serializers.CharField(
+        max_length=20, required=False, allow_blank=True)
+    full_name = serializers.CharField(max_length=255)
+    vehicle_type = serializers.ChoiceField(
+        choices=DriverProfile.Vehicle, required=False)
+    license_number = serializers.CharField(
+        max_length=50, required=False, allow_blank=True)
+
+    def validate_email(self, value):
+        if User.objects.filter(email=value).exists():
+            raise serializers.ValidationError(
+                "A user with this email already exists.")
+        return value
+
+    def create(self, validated_data):
+        """
+        Instead of creating a full driver account now, we can:
+        - create a pending user with role='driver' and is_active=False
+        - OR send an invite link via email with a token
+        """
+        user = User.objects.create_user(
+            email=validated_data["email"],
+            phone=validated_data.get("phone"),
+            full_name=validated_data["full_name"],
+            role=User.Role.DRIVER,
+            is_active=False  # activate when invite is accepted
+        )
+        # Optional: create a driver profile with partial info
+        DriverProfile.objects.create(
+            user=user,
+            vehicle_type=validated_data.get("vehicle_type", ""),
+            license_number=validated_data.get("license_number", ""),
+            is_verified=False,
+            status="inactive"
+        )
+        return user

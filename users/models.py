@@ -90,34 +90,11 @@ class CustomerProfile(models.Model):
         return f"CustomerProfile({self.user_id})"
 
 
-class DriverProfile(models.Model):
-    class Vehicle(models.TextChoices):
-        BIKE = "bike", "Bike"
-        CAR = "car", "Car"
-        VAN = "van", "Van"
-        TRUCK = "truck", "Truck"
 
-    class Status(models.TextChoices):
-        ACTIVE = "active", "Active"
-        INACTIVE = "inactive", "Inactive"
-        SUSPENDED = "suspended", "Suspended"
-
-    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="driver_profile")
-    license_number = models.CharField(max_length=50)
-    vehicle_type = models.CharField(max_length=20, choices=Vehicle.choices)
-    vehicle_registration = models.CharField(max_length=50, blank=True, null=True)
-    is_verified = models.BooleanField(default=False)
-    status = models.CharField(max_length=20, choices=Status.choices, default=Status.INACTIVE)
-
-    # Performance
-    total_deliveries = models.PositiveIntegerField(default=0)
-    rating = models.DecimalField(max_digits=3, decimal_places=2, default=0.00)
-
-    def __str__(self):
-        return f"DriverProfile({self.user_id})"
 
 
 class AdminProfile(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="admin_profile")
     department = models.CharField(max_length=100, blank=True, null=True)
     access_level = models.CharField(max_length=50, default="full")
@@ -126,32 +103,6 @@ class AdminProfile(models.Model):
         return f"AdminProfile({self.user_id})"
 
 
-class DriverDocument(models.Model):
-    """KYC documents for drivers (license scan, insurance, national ID)."""
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    driver = models.ForeignKey(DriverProfile, on_delete=models.CASCADE, related_name="documents")
-    doc_type = models.CharField(max_length=50)  # e.g., license, insurance, id
-    file = models.FileField(upload_to="drivers/docs/")
-    uploaded_at = models.DateTimeField(default=timezone.now)
-    verified = models.BooleanField(default=False)
-    notes = models.TextField(blank=True, null=True)
-
-    def __str__(self):
-        return f"DriverDocument({self.doc_type}, {self.driver_id})"
 
 
-class DriverInvitation(models.Model):
-    """Admin invites a driver; driver accepts and sets password via token."""
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    email = models.EmailField()
-    full_name = models.CharField(max_length=255)
-    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name="driver_invites_created")
-    token = models.UUIDField(default=uuid.uuid4, unique=True)
-    expires_at = models.DateTimeField()
-    accepted_at = models.DateTimeField(blank=True, null=True)
 
-    def is_expired(self) -> bool:
-        return timezone.now() >= self.expires_at
-
-    def __str__(self):
-        return f"DriverInvitation({self.email})"

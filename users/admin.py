@@ -3,7 +3,7 @@ from django.contrib.auth import get_user_model
 from django.contrib import admin
 from unfold.admin import ModelAdmin
 
-from .models import CustomerProfile, DriverProfile, AdminProfile, DriverDocument, DriverInvitation
+from users.models import CustomerProfile, AdminProfile
 
 User = get_user_model()
 
@@ -18,10 +18,6 @@ class UserAdmin(ModelAdmin):
     readonly_fields = ("date_joined",)
 
 
-@admin.register(DriverProfile)
-class DriverProfileAdmin(ModelAdmin):
-    list_display = ("user", "vehicle_type", "status", "is_verified", "total_deliveries", "rating")
-    list_filter = ("vehicle_type", "status", "is_verified")
 
 
 @admin.register(CustomerProfile)
@@ -34,13 +30,4 @@ class AdminProfileAdmin(ModelAdmin):
     list_display = ("user", "department", "access_level")
 
 
-@admin.register(DriverDocument)
-class DriverDocumentAdmin(ModelAdmin):
-    list_display = ("driver", "doc_type", "verified", "uploaded_at")
-    list_filter = ("doc_type", "verified")
 
-
-@admin.register(DriverInvitation)
-class DriverInvitationAdmin(ModelAdmin):
-    list_display = ("email", "full_name", "token", "expires_at", "accepted_at")
-    readonly_fields = ("token",)

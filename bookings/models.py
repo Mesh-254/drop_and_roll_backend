@@ -9,6 +9,8 @@ from django.db import models
 from django.utils import timezone
 import uuid
 
+from driver.models import DriverProfile
+
 
 class BookingStatus(models.TextChoices):
     PENDING = "pending", "Pending"
@@ -139,7 +141,7 @@ class Booking(models.Model):
     guest_email = models.CharField(max_length=255, blank=True, null=True, validators=[
                                    EmailValidator()], db_index=True)
 
-    driver = models.ForeignKey("users.DriverProfile", on_delete=models.SET_NULL, null=True, blank=True,
+    driver = models.ForeignKey(DriverProfile, on_delete=models.SET_NULL, null=True, blank=True,
                                related_name="bookings")
 
     pickup_address = models.ForeignKey(
