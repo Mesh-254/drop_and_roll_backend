@@ -59,6 +59,12 @@ class DriverDocument(models.Model):
 
 class DriverInvitation(models.Model):
     """Admin invites a driver; driver accepts and sets password via token."""
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        ACCEPTED = "accepted", "Accepted"
+        EXPIRED = "expired", "Expired"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email = models.EmailField()
     full_name = models.CharField(max_length=255)
@@ -66,9 +72,15 @@ class DriverInvitation(models.Model):
     token = models.UUIDField(default=uuid.uuid4, unique=True)
     expires_at = models.DateTimeField()
     accepted_at = models.DateTimeField(blank=True, null=True)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
 
     def is_expired(self) -> bool:
         return timezone.now() >= self.expires_at
+
+    def save(self, *args, **kwargs):
+        if self.is_expired() and self.status != self.Status.ACCEPTED:
+            self.status = self.Status.EXPIRED
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"DriverInvitation({self.email})"

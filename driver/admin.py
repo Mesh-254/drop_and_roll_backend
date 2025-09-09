@@ -41,5 +41,5 @@ class DriverDocumentAdmin(ModelAdmin):
 
 @admin.register(DriverInvitation)
 class DriverInvitationAdmin(ModelAdmin):
-    list_display = ("email", "full_name", "token", "expires_at", "accepted_at")
+    list_display = ("email", "full_name", "token", "status","expires_at", "accepted_at")
     readonly_fields = ("token",)
