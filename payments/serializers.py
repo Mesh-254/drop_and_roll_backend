@@ -12,6 +12,7 @@ class PaymentMethodSerializer(serializers.ModelSerializer):
 
 
 class PaymentTransactionSerializer(serializers.ModelSerializer):
+
     class Meta:
         model = PaymentTransaction
         fields = ["id", "user", "guest_email", "method", "booking", "amount", "status", "gateway_response", "reference", "metadata", "created_at",
