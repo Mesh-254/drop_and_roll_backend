@@ -205,8 +205,8 @@ CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = env("CELERY_TIMEZONE", default="UTC")
 
 # Email backend
-EMAIL_BACKEND = env(
-    "EMAIL_BACKEND", default="django.core.mail.backends.smtp.EmailBackend")
+# EMAIL_BACKEND = env("EMAIL_BACKEND", default="django.core.mail.backends.smtp.EmailBackend")
+EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"  # For testing"
 EMAIL_HOST = env("EMAIL_HOST", default="smtp.gmail.com")
 EMAIL_PORT = env("EMAIL_PORT", default=587)
 EMAIL_HOST_USER = env("EMAIL_HOST_USER")
@@ -432,6 +432,12 @@ UNFOLD = {
                         "permission": lambda request: request.user.is_superuser,
                     },
                     {
+                        "title": _("Driver Invites"),
+                        "icon": "account_circle",
+                        "link": reverse_lazy("admin:driver_driverinvitation_changelist"),
+                        "permission": lambda request: request.user.is_superuser,
+                    },
+                    {
                         "title": _("Driver Documents"),
                         "icon": "admin_panel_settings",
                         "link": reverse_lazy("admin:driver_driverdocument_changelist"),
@@ -492,3 +498,6 @@ def badge_callback(request):
 
 # def permission_callback(request):
 #     return request.user.has_perm("sample_app.change_model")
+
+SITE_URL = env("SITE_URL",default='http://127.0.0.1:8000')
+FRONTEND_URL=env("FRONTEND_URL",default="http://localhost:5173")

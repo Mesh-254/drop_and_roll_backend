@@ -1,11 +1,16 @@
+import uuid
 from decimal import Decimal
 
 from django.utils import timezone
 from rest_framework import viewsets, mixins
 from rest_framework.decorators import action
-from rest_framework.permissions import IsAuthenticated,AllowAny
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
+from rest_framework.authtoken.models import Token
+from rest_framework import status
 
+from bookings.models import Booking, BookingStatus
+from bookings.serializers import BookingSerializer
 from driver.models import (
     DriverAvailability, DriverPayout, DriverRating, DriverDocument,
 )
@@ -169,3 +174,52 @@ class DriverInviteViewSet(mixins.CreateModelMixin,
         s.is_valid(raise_exception=True)
         user = s.save()
         return Response(UserSerializer(user).data, status=201)
+
+
+class DriverAssignedBookingViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
+    serializer_class = BookingSerializer
+    permission_classes = [IsAuthenticated, IsDriver | IsAdmin]
+
+    def get_queryset(self):
+        if getattr(self, 'swagger_fake_view', False):
+            return Booking.objects.none()
+        user = self.request.user
+        driver_id = self.request.query_params.get("driver_id")
+
+        # Base queryset
+        queryset = Booking.objects.select_related(
+            "pickup_address", "dropoff_address", "customer", "driver", "quote"
+        ).prefetch_related(
+            "quote__shipping_type", "quote__service_type"
+        ).filter(status=BookingStatus.ASSIGNED).order_by("-created_at")
+
+        # If driver_id is provided and user is admin
+        if driver_id and hasattr(user, "role") and user.role == "admin":
+            try:
+                # Validate driver_id as UUID
+                uuid.UUID(driver_id)
+                queryset = queryset.filter(driver_id=driver_id)
+            except ValueError:
+                return Booking.objects.none()  # Invalid driver_id
+        # For non-admin drivers, restrict to their own bookings
+        elif hasattr(user, "driver_profile"):
+            queryset = queryset.filter(driver=user.driver_profile)
+        else:
+            return Booking.objects.none()  # No driver profile
+
+        return queryset
+
+    def list(self, request, *args, **kwargs):
+        # Validate token if provided in Authorization header
+        auth_token = request.META.get("HTTP_AUTHORIZATION", "").split("Token ")[1] if "Token " in request.META.get(
+            "HTTP_AUTHORIZATION", "") else None
+        if auth_token:
+            try:
+                token = Token.objects.get(key=auth_token)
+                user = token.user
+                if not hasattr(user, "driver_profile") and user.role != "admin":
+                    return Response({"detail": "Invalid token: User is not a driver or admin"},
+                                    status=status.HTTP_403_FORBIDDEN)
+            except Token.DoesNotExist:
+                return Response({"detail": "Invalid token"}, status=status.HTTP_401_UNAUTHORIZED)
+        return super().list(request, *args, **kwargs)
