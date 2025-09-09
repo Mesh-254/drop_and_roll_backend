@@ -6,12 +6,14 @@ from django.db import models
 from django.utils import timezone
 from django.core.validators import ValidationError
 
+
 class PaymentMethodType(models.TextChoices):
     MPESA = "mpesa", "M-Pesa"
     CARD = "card", "Card"
     BANK = "bank", "Bank Transfer"
     WALLET = "wallet", "Wallet"
     PAYPAL = "paypal", "PayPal/Google Pay"
+    STRIPE = 'stripe', 'Stripe'
 
 
 class PaymentStatus(models.TextChoices):
@@ -59,8 +61,9 @@ class PaymentTransaction(models.Model):
 
     def clean(self):
         if not self.user and not self.guest_email:
-            raise ValidationError("Either user or guest_email must be provided.")
-        
+            raise ValidationError(
+                "Either user or guest_email must be provided.")
+
     def save(self, *args, **kwargs):
         if self.guest_email:
             self.guest_email = self.guest_email.lower()
