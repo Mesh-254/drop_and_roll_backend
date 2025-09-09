@@ -26,7 +26,14 @@ from .permissions import IsCustomer, IsAdmin
 import logging
 from rest_framework.permissions import IsAuthenticated, AllowAny  # type: ignore
 
+import stripe  # type: ignore
+from django.views.decorators.csrf import csrf_exempt  # type: ignore
+from django.http import HttpResponse  # type: ignore
+
 logger = logging.getLogger(__name__)
+
+# stripe api key setup
+stripe.api_key = settings.STRIPE_SECRET_KEY
 
 
 def get_access_token():
@@ -270,7 +277,114 @@ class PaymentTransactionViewSet(viewsets.ModelViewSet):
             logger.error(f"Error capturing transaction {pk}: {str(e)}")
             return Response({"success": False, "error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    # STRIPE PAYMENT HANDLER
 
+    @action(methods=['post'], detail=True, url_path='initiate-stripe')
+    def initiate_stripe_transaction(self, request, pk=None):
+        try:
+            transaction = self.get_object()
+            if transaction.status != PaymentStatus.PENDING:
+                logger.warning(
+                    f"Transaction {pk} is not pending: {transaction.status}")
+                return Response({"success": False, "error": "Transaction is not pending"}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Skip method validation for one-time Stripe payments (e.g., Apple Pay or CardElement)
+            if transaction.method and transaction.method.method_type not in [PaymentMethodType.CARD, PaymentMethodType.STRIPE]:
+                logger.error(
+                    f"Invalid payment method for Stripe transaction {pk}")
+                return Response({"success": False, "error": "A valid CARD payment method is required for Stripe"}, status=status.HTTP_400_BAD_REQUEST)
+
+            exchange_rate_kes_to_usd = Decimal('0.5')
+            usd_amount = transaction.amount * exchange_rate_kes_to_usd
+            # Convert to cents for Stripe
+            usd_amount_cents = int(usd_amount * 100)
+
+            if usd_amount_cents <= 0:
+                logger.error(
+                    f"Invalid transaction amount for {pk}: {usd_amount} USD (KSh {transaction.amount})")
+                return Response({"success": False, "error": "Transaction amount must be greater than zero"}, status=status.HTTP_400_BAD_REQUEST)
+
+            intent = stripe.PaymentIntent.create(
+                amount=usd_amount_cents,
+                currency="usd",
+                payment_method_types=["card"],  # Allow card and Apple Pay
+                metadata={"transaction_id": str(transaction.id)},
+                description=f"Payment for transaction {transaction.reference}",
+            )
+
+            transaction.metadata.update(
+                {"gateway": "stripe", "stripe_payment_intent_id": intent.id})
+            transaction.save(update_fields=["metadata"])
+            logger.info(
+                f"Stripe PaymentIntent created for tx {transaction.id}: {intent.id}")
+
+            return Response({
+                "success": True,
+                "client_secret": intent.client_secret,
+            })
+        except stripe.error.StripeError as e:
+            logger.error(f"Stripe error for tx {pk}: {str(e)}")
+            return Response({"success": False, "error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.error(f"Error initiating Stripe transaction {pk}: {str(e)}")
+            return Response({"success": False, "error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+# stripe webhook callback handler
+@csrf_exempt
+def stripe_webhook(request):
+    payload = request.body
+    sig_header = request.META.get('HTTP_STRIPE_SIGNATURE')
+    event = None
+
+    try:
+        event = stripe.Webhook.construct_event(
+            payload, sig_header, settings.STRIPE_WEBHOOK_SECRET)
+    except ValueError:
+        logger.error("Invalid Stripe payload")
+        return HttpResponse(status=400)
+    except stripe.error.SignatureVerificationError:
+        logger.error("Invalid Stripe signature")
+        return HttpResponse(status=400)
+
+    with transaction.atomic():
+        if event['type'] == 'payment_intent.succeeded':
+            intent = event['data']['object']
+            tx_id = intent['metadata'].get('transaction_id')
+            try:
+                tx = PaymentTransaction.objects.get(id=tx_id)
+                if tx.metadata.get('gateway') != 'stripe':
+                    logger.warning(f"Non-Stripe tx {tx_id} in webhook")
+                    return HttpResponse(status=400)
+                if tx.status == PaymentStatus.PENDING:
+                    tx.status = PaymentStatus.SUCCESS
+                    tx.gateway_response.update(dict(intent))
+                    tx.save(update_fields=["status", "gateway_response"])
+                    if tx.booking:
+                        tx.booking.status = BookingStatus.SCHEDULED
+                        tx.booking.tracking_number = f"BK-{shortuuid.uuid()[:8].upper()}"
+                        tx.booking.save(
+                            update_fields=["status", "tracking_number"])
+                    logger.info(f"Stripe success for tx {tx.id}")
+            except PaymentTransaction.DoesNotExist:
+                logger.error(f"Tx {tx_id} not found")
+
+        elif event['type'] == 'payment_intent.payment_failed':
+            intent = event['data']['object']
+            tx_id = intent['metadata'].get('transaction_id')
+            try:
+                tx = PaymentTransaction.objects.get(id=tx_id)
+                if tx.metadata.get('gateway') != 'stripe':
+                    return HttpResponse(status=400)
+                tx.status = PaymentStatus.FAILED
+                tx.gateway_response.update(dict(intent))
+                tx.save(update_fields=["status", "gateway_response"])
+                logger.info(f"Stripe failure for tx {tx.id}")
+            except PaymentTransaction.DoesNotExist:
+                logger.error(f"Tx {tx_id} not found")
+
+    return HttpResponse(status=200)
+
+# paypal webhook callback handler
 class PaymentCallbackView(APIView):
     authentication_classes = []
     permission_classes = []
@@ -349,37 +463,58 @@ class WalletViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class RefundViewSet(viewsets.ModelViewSet):
+    serializer_class = RefundSerializer
+    permission_classes = [IsCustomer | IsAdmin]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_authenticated and user.is_staff:
+            return Refund.objects.all()
+        return Refund.objects.filter(transaction__user=user) | Refund.objects.filter(transaction__guest_email=user.email.lower())
+
     def perform_create(self, serializer):
-        refund = serializer.save()
-        tx = refund.transaction
-        tx.status = PaymentStatus.REFUNDED
-        tx.save(update_fields=["status"])
-        if tx.method.method_type == PaymentMethodType.PAYPAL:
-            capture_id = tx.metadata.get('capture_id')
-            if not capture_id:
-                raise ValueError("No capture ID found for refund")
-            access_token = get_access_token()
-            url = f"{settings.PAYPAL_API_URL}/v2/payments/captures/{capture_id}/refund"
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {access_token}",
-            }
-            body = {
-                "amount": {"value": str(refund.amount), "currency_code": "USD"}
-            }
-            response = requests.post(url, headers=headers, json=body)
-            try:
-                response.raise_for_status()
-                tx.gateway_response['refund_response'] = response.json()
-                tx.save(update_fields=["gateway_response"])
-            except requests.exceptions.RequestException as e:
-                tx.gateway_response['refund_error'] = response.text if 'response' in locals(
-                ) else str(e)
-                tx.save(update_fields=["gateway_response"])
-                raise
-        if tx.booking:
-            tx.booking.status = BookingStatus.CANCELLED
-            tx.booking.save(update_fields=["status"])
-        wallet, _ = Wallet.objects.get_or_create(user=tx.user)
-        wallet.balance -= refund.amount
-        wallet.save(update_fields=["balance", "updated_at"])
+        with transaction.atomic():
+            refund = serializer.save()
+            tx = refund.transaction
+            tx.status = PaymentStatus.REFUNDED
+            gateway = tx.metadata.get('gateway')
+            if gateway == 'paypal':
+                capture_id = tx.metadata.get('capture_id')
+                if not capture_id:
+                    raise ValueError("No capture ID found for refund")
+                access_token = get_access_token()
+                url = f"{settings.PAYPAL_API_URL}/v2/payments/captures/{capture_id}/refund"
+                headers = {
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {access_token}",
+                }
+                body = {
+                    "amount": {"value": str(refund.amount), "currency_code": "USD"}
+                }
+                response = requests.post(url, headers=headers, json=body)
+                try:
+                    response.raise_for_status()
+                    tx.gateway_response['refund_response'] = response.json()
+                except requests.exceptions.RequestException as e:
+                    tx.gateway_response['refund_error'] = response.text if 'response' in locals(
+                    ) else str(e)
+                    raise
+            elif gateway == 'stripe':
+                intent_id = tx.metadata.get('stripe_payment_intent_id')
+                if not intent_id:
+                    raise ValueError(
+                        "No Stripe PaymentIntent ID found for refund")
+                stripe_refund = stripe.Refund.create(
+                    payment_intent=intent_id,
+                    amount=int(refund.amount * 100),  # Convert to cents
+                )
+                tx.gateway_response['refund_response'] = dict(stripe_refund)
+            else:
+                raise ValueError(f"Unsupported gateway for refund: {gateway}")
+            tx.save(update_fields=["status", "gateway_response"])
+            if tx.booking:
+                tx.booking.status = BookingStatus.CANCELLED
+                tx.booking.save(update_fields=["status"])
+            wallet, _ = Wallet.objects.get_or_create(user=tx.user)
+            wallet.balance -= refund.amount
+            wallet.save(update_fields=["balance", "updated_at"])
