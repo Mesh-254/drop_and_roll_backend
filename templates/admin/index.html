@@ -1,8 +1,26 @@
 {% extends 'admin/base.html' %}
 {% load i18n unfold static %}
+{% load static %}
 
 {% block extrastyle %}
-    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <style>
+        /* Custom Tailwind styles for table and minor tweaks */
+        .table-section table {
+            @apply w-full border-collapse;
+        }
+
+        .table-section th, .table-section td {
+            @apply border-b border-gray-200 py-3 px-4 text-sm;
+        }
+
+        .table-section th {
+            @apply font-semibold text-gray-700 bg-gray-50;
+        }
+
+        .table-section td {
+            @apply text-gray-600;
+        }
+    </style>
 {% endblock %}
 
 {% block breadcrumbs %}{% endblock %}
@@ -17,87 +35,334 @@
 {% endblock %}
 
 {% block content %}
-    {% if error %}
-        {{ error }}
-    {% else %}
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 p-4">
-            {% component "unfold/components/card.html" with title="Total Users" %}
-                {% component "unfold/components/icon.html" %}
-                    person
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        {% if error %}
+            <div class="bg-red-50 border-l-4 border-red-500 text-red-700 p-4 mb-6 rounded-md" role="alert">
+                {{ error }}
+            </div>
+        {% else %}
+            <!-- KPI Cards Section -->
+            <h2 class="text-2xl font-bold text-gray-800 mb-4">Key Metrics</h2>
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+                {% component "unfold/components/card.html" with title="Total Users" class="col-span-1 bg-white shadow-md rounded-lg p-4" %}
+                    {% component "unfold/components/icon.html" %}
+                        person
+                    {% endcomponent %}
+                    {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
+                        {{ total_users }}
+                    {% endcomponent %}
+                    {% component "unfold/components/text.html" with class="text-gray-500 text-sm" %}
+                        Admins: {{ total_admins }} | Customers: {{ total_customers }} | Drivers: {{ total_drivers }}
+                    {% endcomponent %}
                 {% endcomponent %}
-                {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
-                    {{ total_users }}
-                {% endcomponent %}
-                {% component "unfold/components/text.html" with class="text-gray-500" %}
-                    Admins: {{ total_admins }} | Customers: {{ total_customers }} | Drivers: {{ total_drivers }}
-                {% endcomponent %}
-            {% endcomponent %}
 
-            {% component "unfold/components/card.html" with title="Total Bookings" %}
-                {% component "unfold/components/icon.html" %}
-                    local_shipping
+                {% component "unfold/components/card.html" with title="Total Bookings" class="col-span-1 bg-white shadow-md rounded-lg p-4" %}
+                    {% component "unfold/components/icon.html" %}
+                        local_shipping
+                    {% endcomponent %}
+                    {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
+                        {{ total_bookings }}
+                    {% endcomponent %}
+                    {% component "unfold/components/text.html" with class="text-gray-500 text-sm" %}
+                        Pending: {{ booking_status_counts.pending|default:0 }} | In Transit:
+                        {{ booking_status_counts.in_transit|default:0 }} | Delivered:
+                        {{ booking_status_counts.delivered|default:0 }}
+                    {% endcomponent %}
                 {% endcomponent %}
-                {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
-                    {{ total_bookings }}
-                {% endcomponent %}
-                {% component "unfold/components/text.html" with class="text-gray-500" %}
-                    Pending: {{ booking_status_counts.pending|default:0 }} | In Transit: {{ booking_status_counts.in_transit|default:0 }} | Delivered: {{ booking_status_counts.delivered|default:0 }}
-                {% endcomponent %}
-            {% endcomponent %}
 
-            {% component "unfold/components/card.html" with title="Total Quotes" %}
-                {% component "unfold/components/icon.html" %}
-                    description
+                {% component "unfold/components/card.html" with title="Total Quotes" class="col-span-1 bg-white shadow-md rounded-lg p-4" %}
+                    {% component "unfold/components/icon.html" %}
+                        description
+                    {% endcomponent %}
+                    {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
+                        {{ total_quotes }}
+                    {% endcomponent %}
+                    {% component "unfold/components/text.html" with class="text-gray-500 text-sm" %}
+                        Service Types: {{ total_service_types }} | Shipping Types: {{ total_shipping_types }}
+                    {% endcomponent %}
                 {% endcomponent %}
-                {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
-                    {{ total_quotes }}
-                {% endcomponent %}
-                {% component "unfold/components/text.html" with class="text-gray-500" %}
-                    Service Types: {{ total_service_types }} | Shipping Types: {{ total_shipping_types }}
-                {% endcomponent %}
-            {% endcomponent %}
 
-            {% component "unfold/components/card.html" with title="Total Revenue" %}
-                {% component "unfold/components/icon.html" %}
-                    attach_money
+                {% component "unfold/components/card.html" with title="Total Revenue" class="col-span-1 bg-white shadow-md rounded-lg p-4" %}
+                    {% component "unfold/components/icon.html" %}
+                        attach_money
+                    {% endcomponent %}
+                    {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
+                        KES {{ total_revenue|floatformat:2 }}
+                    {% endcomponent %}
+                    {% component "unfold/components/text.html" with class="text-gray-500 text-sm" %}
+                        From {{ total_bookings }} bookings
+                    {% endcomponent %}
                 {% endcomponent %}
-                {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
-                    KES {{ total_revenue|floatformat:2 }}
-                {% endcomponent %}
-                {% component "unfold/components/text.html" with class="text-gray-500" %}
-                    From {{ total_bookings }} bookings
-                {% endcomponent %}
-            {% endcomponent %}
 
-            {% component "unfold/components/card.html" with title="Recurring Schedules" %}
-                {% component "unfold/components/icon.html" %}
-                    event_repeat
+                {% component "unfold/components/card.html" with title="Recurring Schedules" class="col-span-1 bg-white shadow-md rounded-lg p-4" %}
+                    {% component "unfold/components/icon.html" %}
+                        event_repeat
+                    {% endcomponent %}
+                    {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
+                        {{ total_recurring_schedules }}
+                    {% endcomponent %}
+                    {% component "unfold/components/text.html" with class="text-gray-500 text-sm" %}
+                        Active schedules
+                    {% endcomponent %}
                 {% endcomponent %}
-                {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
-                    {{ total_recurring_schedules }}
-                {% endcomponent %}
-                {% component "unfold/components/text.html" with class="text-gray-500" %}
-                    Active schedules
-                {% endcomponent %}
-            {% endcomponent %}
 
-            {% component "unfold/components/card.html" with title="Driver Status" %}
-                {% component "unfold/components/icon.html" %}
-                    directions_car
+                {% component "unfold/components/card.html" with title="Driver Status" class="col-span-1 bg-white shadow-md rounded-lg p-4" %}
+                    {% component "unfold/components/icon.html" %}
+                        directions_car
+                    {% endcomponent %}
+                    {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
+                        {{ total_drivers }}
+                    {% endcomponent %}
+                    {% component "unfold/components/text.html" with class="text-gray-500 text-sm" %}
+                        Active: {{ driver_status_counts.active|default:0 }} | Inactive:
+                        {{ driver_status_counts.inactive|default:0 }} | Suspended:
+                        {{ driver_status_counts.suspended|default:0 }}
+                    {% endcomponent %}
                 {% endcomponent %}
-                {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
-                    {{ total_drivers }}
-                {% endcomponent %}
-                {% component "unfold/components/text.html" with class="text-gray-500" %}
-                    Active: {{ driver_status_counts.active|default:0 }} | Inactive: {{ driver_status_counts.inactive|default:0 }} | Suspended: {{ driver_status_counts.suspended|default:0 }}
-                {% endcomponent %}
-            {% endcomponent %}
-        </div>
 
-        <div class="p-4">
-            Bookings Over Last 7 Days
-            {% component "unfold/components/chart/line.html" with data=chart_data height="300" width="100%" class="bg-primary-50" %}
-            {% endcomponent %}
-        </div>
-    {% endif %}
+                {% component "unfold/components/card.html" with title="Average Booking Value" class="col-span-1 bg-white shadow-md rounded-lg p-4" %}
+                    {% component "unfold/components/icon.html" %}
+                        bar_chart
+                    {% endcomponent %}
+                    {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
+                        KES {{ average_booking_value|floatformat:2 }}
+                    {% endcomponent %}
+                    {% component "unfold/components/text.html" with class="text-gray-500 text-sm" %}
+                        Average value per booking
+                    {% endcomponent %}
+                {% endcomponent %}
+
+                {% component "unfold/components/card.html" with title="Total Payouts" class="col-span-1 bg-white shadow-md rounded-lg p-4" %}
+                    {% component "unfold/components/icon.html" %}
+                        payments
+                    {% endcomponent %}
+                    {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
+                        KES {{ total_payouts|floatformat:2 }}
+                    {% endcomponent %}
+                    {% component "unfold/components/text.html" with class="text-gray-500 text-sm" %}
+                        Payouts to drivers
+                    {% endcomponent %}
+                {% endcomponent %}
+
+                {% component "unfold/components/card.html" with title="Total Refunds" class="col-span-1 bg-white shadow-md rounded-lg p-4" %}
+                    {% component "unfold/components/icon.html" %}
+                        money_off
+                    {% endcomponent %}
+                    {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
+                        KES {{ total_refunds|floatformat:2 }}
+                    {% endcomponent %}
+                    {% component "unfold/components/text.html" with class="text-gray-500 text-sm" %}
+                        Refunds processed
+                    {% endcomponent %}
+                {% endcomponent %}
+
+                {% component "unfold/components/card.html" with title="Average Driver Rating" class="col-span-1 bg-white shadow-md rounded-lg p-4" %}
+                    {% component "unfold/components/icon.html" %}
+                        star_rate
+                    {% endcomponent %}
+                    {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
+                        {{ average_driver_rating|floatformat:2 }}
+                    {% endcomponent %}
+                    {% component "unfold/components/text.html" with class="text-gray-500 text-sm" %}
+                        Out of 5
+                    {% endcomponent %}
+                {% endcomponent %}
+
+                {% component "unfold/components/card.html" with title="Payment Success Rate" class="col-span-1 bg-white shadow-md rounded-lg p-4" %}
+                    {% component "unfold/components/icon.html" %}
+                        check_circle
+                    {% endcomponent %}
+                    {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
+                        {{ payment_success_rate }}%
+                    {% endcomponent %}
+                    {% component "unfold/components/text.html" with class="text-gray-500 text-sm" %}
+                        Successful payments
+                    {% endcomponent %}
+                {% endcomponent %}
+
+                {% component "unfold/components/card.html" with title="Total Wallet Balance" class="col-span-1 bg-white shadow-md rounded-lg p-4" %}
+                    {% component "unfold/components/icon.html" %}
+                        account_balance_wallet
+                    {% endcomponent %}
+                    {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
+                        KES {{ total_wallet_balance|floatformat:2 }}
+                    {% endcomponent %}
+                    {% component "unfold/components/text.html" with class="text-gray-500 text-sm" %}
+                        Across all users
+                    {% endcomponent %}
+                {% endcomponent %}
+
+                {% component "unfold/components/card.html" with title="Total Loyalty Points" class="col-span-1 bg-white shadow-md rounded-lg p-4" %}
+                    {% component "unfold/components/icon.html" %}
+                        loyalty
+                    {% endcomponent %}
+                    {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
+                        {{ total_loyalty_points }}
+                    {% endcomponent %}
+                    {% component "unfold/components/text.html" with class="text-gray-500 text-sm" %}
+                        Across all customers
+                    {% endcomponent %}
+                {% endcomponent %}
+
+                {% component "unfold/components/card.html" with title="Driver Invitations Sent" class="col-span-1 bg-white shadow-md rounded-lg p-4" %}
+                    {% component "unfold/components/icon.html" %}
+                        mail
+                    {% endcomponent %}
+                    {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
+                        {{ total_driver_invitations }}
+                    {% endcomponent %}
+                    {% component "unfold/components/text.html" with class="text-gray-500 text-sm" %}
+                        Pending: {{ pending_driver_invitations }}
+                    {% endcomponent %}
+                {% endcomponent %}
+
+                {% component "unfold/components/card.html" with title="Bulk Uploads" class="col-span-1 bg-white shadow-md rounded-lg p-4" %}
+                    {% component "unfold/components/icon.html" %}
+                        upload_file
+                    {% endcomponent %}
+                    {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
+                        {{ total_bulk_uploads }}
+                    {% endcomponent %}
+                    {% component "unfold/components/text.html" with class="text-gray-500 text-sm" %}
+                        Processed: {{ total_processed_bulk_uploads }}
+                    {% endcomponent %}
+                {% endcomponent %}
+
+                {% component "unfold/components/card.html" with title="Validated Addresses" class="col-span-1 bg-white shadow-md rounded-lg p-4" %}
+                    {% component "unfold/components/icon.html" %}
+                        location_on
+                    {% endcomponent %}
+                    {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
+                        {{ total_validated_addresses }}
+                    {% endcomponent %}
+                    {% component "unfold/components/text.html" with class="text-gray-500 text-sm" %}
+                        Validated addresses
+                    {% endcomponent %}
+                {% endcomponent %}
+
+                {% component "unfold/components/card.html" with title="Top Service Type" class="col-span-1 bg-white shadow-md rounded-lg p-4" %}
+                    {% component "unfold/components/icon.html" %}
+                        category
+                    {% endcomponent %}
+                    {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
+                        {{ top_service_type_name }}
+                    {% endcomponent %}
+                    {% component "unfold/components/text.html" with class="text-gray-500 text-sm" %}
+                        Usage: {{ top_service_type_usage }}
+                    {% endcomponent %}
+                {% endcomponent %}
+
+                {% component "unfold/components/card.html" with title="Failed Bookings" class="col-span-1 bg-white shadow-md rounded-lg p-4" %}
+                    {% component "unfold/components/icon.html" %}
+                        error
+                    {% endcomponent %}
+                    {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
+                        {{ total_failed_bookings }}
+                    {% endcomponent %}
+                    {% component "unfold/components/text.html" with class="text-gray-500 text-sm" %}
+                        Failed bookings
+                    {% endcomponent %}
+                {% endcomponent %}
+
+                {% component "unfold/components/card.html" with title="Cancelled Bookings" class="col-span-1 bg-white shadow-md rounded-lg p-4" %}
+                    {% component "unfold/components/icon.html" %}
+                        cancel
+                    {% endcomponent %}
+                    {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
+                        {{ total_cancelled_bookings }}
+                    {% endcomponent %}
+                    {% component "unfold/components/text.html" with class="text-gray-500 text-sm" %}
+                        Cancelled bookings
+                    {% endcomponent %}
+                {% endcomponent %}
+            </div>
+
+            <!-- Charts Section -->
+            <h2 class="text-2xl font-bold text-gray-800 mb-4">Analytics</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                <div class="bg-white shadow-md rounded-lg p-6">
+                    <h3 class="text-lg font-semibold text-gray-800 mb-4">Bookings Over Last 7 Days</h3>
+                    {% component "unfold/components/chart/line.html" with data=chart_data height="300" width="100%" class="bg-primary-50 rounded-md" %}
+                    {% endcomponent %}
+                </div>
+
+                <div class="bg-white shadow-md rounded-lg p-6">
+                    <h3 class="text-lg font-semibold text-gray-800 mb-4">Revenue Over Last 7 Days</h3>
+                    {% component "unfold/components/chart/line.html" with data=revenue_chart_data height="300" width="100%" class="bg-primary-50 rounded-md" %}
+                    {% endcomponent %}
+                </div>
+
+                <div class="bg-white shadow-md rounded-lg p-6">
+                    <h3 class="text-lg font-semibold text-gray-800 mb-4">Bookings by Status</h3>
+                    {% component "unfold/components/chart/bar.html" with data=status_chart_data height="300" width="100%" class="bg-primary-50 rounded-md" %}
+                    {% endcomponent %}
+                </div>
+
+                <div class="bg-white shadow-md rounded-lg p-6">
+                    <h3 class="text-lg font-semibold text-gray-800 mb-4">Users by Role</h3>
+                    {% component "unfold/components/chart/bar.html" with data=role_chart_data height="300" width="100%" class="bg-primary-50 rounded-md" %}
+                    {% endcomponent %}
+                </div>
+
+                <div class="bg-white shadow-md rounded-lg p-6">
+                    <h3 class="text-lg font-semibold text-gray-800 mb-4">Bookings by Service Type</h3>
+                    {% component "unfold/components/chart/bar.html" with data=service_chart_data height="300" width="100%" class="bg-primary-50 rounded-md" %}
+                    {% endcomponent %}
+                </div>
+
+                <div class="bg-white shadow-md rounded-lg p-6">
+                    <h3 class="text-lg font-semibold text-gray-800 mb-4">Payouts Over Last 7 Days</h3>
+                    {% component "unfold/components/chart/line.html" with data=payout_chart_data height="300" width="100%" class="bg-primary-50 rounded-md" %}
+                    {% endcomponent %}
+                </div>
+
+                <div class="bg-white shadow-md rounded-lg p-6">
+                    <h3 class="text-lg font-semibold text-gray-800 mb-4">Ratings Distribution</h3>
+                    {% component "unfold/components/chart/bar.html" with data=ratings_chart_data height="300" width="100%" class="bg-primary-50 rounded-md" %}
+                    {% endcomponent %}
+                </div>
+
+                <div class="bg-white shadow-md rounded-lg p-6">
+                    <h3 class="text-lg font-semibold text-gray-800 mb-4">Payments by Method</h3>
+                    {% component "unfold/components/chart/bar.html" with data=payment_method_chart_data height="300" width="100%" class="bg-primary-50 rounded-md" %}
+                    {% endcomponent %}
+                </div>
+            </div>
+
+            <!-- Recent Bookings Table -->
+            <div class="bg-white shadow-md rounded-lg p-6 ">
+                <h2 class="text-2xl font-bold text-gray-800 mb-4 ">Recent Bookings</h2>
+                <div class="overflow-x-auto grid grid-cols-1 ">
+                    <table class="min-w-full border-collapse bg-white rounded-lg shadow-md">
+                        <thead>
+                        <tr class="bg-primary-50">
+                            <th class="py-3 px-4 text-left text-sm font-semibold text-primary-600">ID</th>
+                            <th class="py-3 px-4 text-left text-sm font-semibold text-primary-600">Customer</th>
+                            <th class="py-3 px-4 text-left text-sm font-semibold text-primary-600">Service Type</th>
+                            <th class="py-3 px-4 text-left text-sm font-semibold text-primary-600">Status</th>
+                            <th class="py-3 px-4 text-left text-sm font-semibold text-primary-600">Final Price</th>
+                            <th class="py-3 px-4 text-left text-sm font-semibold text-primary-600">Created At</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        {% for booking in recent_bookings_table %}
+                            <tr class="{% cycle 'bg-white' 'bg-gray-50' %} hover:bg-gray-100 transition-colors duration-150">
+                                <td class="py-3 px-4 text-sm text-gray-600">{{ booking.id }}</td>
+                                <td class="py-3 px-4 text-sm text-gray-600">{{ booking.customer }}</td>
+                                <td class="py-3 px-4 text-sm text-gray-600">{{ booking.service_type }}</td>
+                                <td class="py-3 px-4 text-sm">
+                    <span class="{% if booking.status == 'Pending' %}bg-yellow-100 text-yellow-800{% elif booking.status == 'In Transit' %}bg-blue-100 text-blue-800{% elif booking.status == 'Delivered' %}bg-green-100 text-green-800{% else %}bg-gray-100 text-gray-800{% endif %} px-2 py-1 rounded-full text-xs font-medium">
+                        {{ booking.status }}
+                    </span>
+                                </td>
+                                <td class="py-3 px-4 text-sm text-gray-600">{{ booking.final_price }}</td>
+                                <td class="py-3 px-4 text-sm text-gray-600">{{ booking.created_at }}</td>
+                            </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        {% endif %}
+    </div>
 {% endblock %}

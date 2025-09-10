@@ -1,0 +1,24 @@
+{% load static %}
+<canvas id="chart-{{ chart_id|default:'pie-chart' }}" width="{{ width|default:'100%' }}" height="{{ height|default:'300' }}" class="{{ class }}"></canvas>
+<script src="{% static 'js/chart.min.js' %}"></script>
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        var ctx = document.getElementById('chart-{{ chart_id|default:'pie-chart' }}').getContext('2d');
+        new Chart(ctx, {
+            type: 'pie',
+            data: {{ data|safe }},
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'top',
+                    },
+                    title: {
+                        display: false,
+                    },
+                },
+            },
+        });
+    });
+</script>
