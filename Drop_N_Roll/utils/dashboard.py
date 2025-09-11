@@ -88,7 +88,7 @@ def dashboard_callback(request, context):
         'labels': [d['date'] for d in reversed(revenue_data)],
         'datasets': [{
             'label': 'Revenue',
-            'data': [d['revenue'] for d in reversed(revenue_data)],
+            'data': [int(d['revenue']) for d in reversed(revenue_data)],
             'borderColor': 'rgb(34, 197, 94)',
             'backgroundColor': 'rgba(34, 197, 94, 0.2)',
             'fill': True,
