@@ -74,3 +74,24 @@ class AdminProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = AdminProfile
         fields = ["department", "access_level"]
+
+class ForgotPasswordSerializer(serializers.Serializer):
+    email = serializers.EmailField(required=True)
+
+
+class ChangePasswordForgotSerializer(serializers.Serializer):
+    old_password = serializers.CharField(required=False, write_only=True)
+    new_password = serializers.CharField(required=True, write_only=True, min_length=8)
+    uid = serializers.CharField(required=False, write_only=True)  # For reset-password
+    token = serializers.CharField(required=False, write_only=True)  # For reset-password
+
+    def validate_new_password(self, value):
+        if len(value) < 8:
+            raise serializers.ValidationError("Password must be at least 8 characters long")
+        return value
+
+    def validate(self, data):
+        if 'uid' in data or 'token' in data:
+            if not (data.get('uid') and data.get('token')):
+                raise serializers.ValidationError("Both uid and token are required for password reset")
+        return data

@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
+from django.core.mail import send_mail
 from django.utils.encoding import force_bytes
 from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
@@ -14,6 +15,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from driver.serializers import DriverProfileSerializer
 from .permissions import IsAdmin, IsDriver, IsCustomer
 from .serializers import (
     UserSerializer,
@@ -23,7 +25,7 @@ from .serializers import (
 
     AdminProfileSerializer,
 
-    LoginSerializer,
+    LoginSerializer, ForgotPasswordSerializer, ChangePasswordForgotSerializer,
 )
 from .tasks import send_confirmation_email
 
@@ -109,6 +111,10 @@ class AuthViewSet(viewsets.GenericViewSet):
             return UserSerializer
         elif self.action == "login":
             return LoginSerializer
+        elif self.action == "forgot_password":
+            return ForgotPasswordSerializer  # No input validation needed
+        elif self.action == "reset_password":
+            return ChangePasswordForgotSerializer  # Reuses new_password field
         return UserSerializer  # default
 
     @action(methods=["post"], detail=False, url_path="login", permission_classes=[AllowAny])
@@ -264,6 +270,95 @@ class AuthViewSet(viewsets.GenericViewSet):
                 "code": "EMAIL_NOT_FOUND",
                 "error": "No account found with this email"
             }, status=status.HTTP_400_BAD_REQUEST)
+
+
+# Forgot password logic
+
+    @action(methods=["post"], detail=False, url_path="forgot-password", permission_classes=[AllowAny])
+    def forgot_password(self, request):
+        email = request.data.get("email", "").lower()
+        if not email:
+            return Response({
+                "code": "INVALID_EMAIL",
+                "error": "Email is required"
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            user = User.objects.get(email=email)
+            if not user.is_active:
+                return Response({
+                    "code": "ACCOUNT_NOT_ACTIVATED",
+                    "error": "Account is not activated"
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            token = default_token_generator.make_token(user)
+            uid = urlsafe_base64_encode(force_bytes(str(user.pk)))
+            subject = "Reset Your Drop 'N Roll Password"
+            reset_link = f"{settings.FRONTEND_URL}/reset-password/?uid={uid}&token={token}"
+            message = (
+                f"Hi {user.full_name},\n\n"
+                f"You requested a password reset. Click the link below to set a new password:\n\n"
+                f"{reset_link}\n\n"
+                f"If you did not request this, please ignore this email.\n\n"
+                f"Best,\nDrop 'N Roll Team"
+            )
+            try:
+                # send_confirmation_email.delay(
+                #     subject=subject,
+                #     message=message,
+                #     from_email=settings.DEFAULT_FROM_EMAIL,
+                #     recipient_list=[user.email]
+                # )
+                send_mail(
+                    subject=subject,
+                    message=message,
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    recipient_list=[user.email],
+                    fail_silently=True,
+                )
+                return Response({
+                    "code": "RESET_EMAIL_SENT",
+                    "detail": "Password reset email sent"
+                }, status=status.HTTP_200_OK)
+            except Exception as e:
+                return Response({
+                    "code": "EMAIL_SEND_FAILED",
+                    "error": f"Failed to send reset email: {str(e)}"
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        except User.DoesNotExist:
+            return Response({
+                "code": "EMAIL_NOT_FOUND",
+                "error": "No account found with this email"
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(methods=["post"], detail=False, url_path="reset-password", permission_classes=[AllowAny])
+    def reset_password(self, request):
+        uid = request.data.get("uid")
+        token = request.data.get("token")
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        new_password = serializer.validated_data["new_password"]
+
+        try:
+            uid = force_str(urlsafe_base64_decode(uid))
+            user = User.objects.get(pk=uid)
+        except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+            return Response({
+                "code": "INVALID_RESET_LINK",
+                "error": "Invalid reset link"
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        if default_token_generator.check_token(user, token):
+            user.set_password(new_password)
+            user.save()
+            return Response({
+                "code": "PASSWORD_RESET_SUCCESS",
+                "detail": "Password reset successfully"
+            }, status=status.HTTP_200_OK)
+        return Response({
+            "code": "INVALID_RESET_LINK",
+            "error": "Invalid reset link"
+        }, status=status.HTTP_400_BAD_REQUEST)
 
     @action(
         methods=["get"],
