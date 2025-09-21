@@ -40,7 +40,7 @@ class DriverProfile(models.Model):
     rating = models.DecimalField(max_digits=3, decimal_places=2, default=0.00)
 
     def __str__(self):
-        return f"DriverProfile({self.user_id})"
+        return f"DriverProfile({self.user.email}, {self.user.role})"
 
 
 class DriverDocument(models.Model):
@@ -53,8 +53,12 @@ class DriverDocument(models.Model):
     verified = models.BooleanField(default=False)
     notes = models.TextField(blank=True, null=True)
 
+    class Meta:
+        # Ensure one doc_type per driver
+        unique_together = ("driver", "doc_type")
+
     def __str__(self):
-        return f"DriverDocument({self.doc_type}, {self.driver_id})"
+        return f"DriverDocument({self.doc_type}, {self.driver.user.email}, {self.driver.user.role})"
 
 
 class DriverInvitation(models.Model):
