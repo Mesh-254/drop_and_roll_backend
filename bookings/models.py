@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from django.db import models
 from django.conf import settings
-from django.core.validators import MinValueValidator, EmailValidator
+from django.core.validators import MinValueValidator, EmailValidator, RegexValidator
 from django.db import models
 from django.utils import timezone
 import uuid
@@ -172,6 +172,27 @@ class Booking(models.Model):
     discount_applied = models.DecimalField(
         max_digits=10, decimal_places=2, default=0)
 
+    # New receiver contact fields
+    receiver_email = models.CharField(
+        max_length=255,
+        validators=[EmailValidator(message="Enter a valid email address")],
+        blank=True,  # Allow empty if optional
+        null=True,   # Allow NULL in DB if optional
+        help_text="Email address of the parcel receiver."
+    )
+    receiver_phone = models.CharField(
+        max_length=20,
+        validators=[
+            RegexValidator(
+                regex=r'^\+?1?\d{9,15}$',
+                message="Phone number must be in a valid format, e.g., +1234567890 (9-15 digits)."
+            )
+        ],
+        blank=True,
+        null=True,
+        help_text="Phone number of the parcel receiver (e.g., +1234567890)."
+    )
+
     # prevent double payment and impotency
     payment_expires_at = models.DateTimeField(blank=True, null=True)
     payment_attempts = models.PositiveIntegerField(default=0)
@@ -183,6 +204,7 @@ class Booking(models.Model):
             models.Index(fields=["status"]),
             models.Index(fields=["created_at"]),
             models.Index(fields=["customer"]),
+            models.Index(fields=['receiver_email']),
         ]
 
     constraints = [
