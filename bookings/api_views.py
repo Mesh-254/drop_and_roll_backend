@@ -8,6 +8,7 @@ from rest_framework.decorators import action  # type: ignore
 from rest_framework.permissions import IsAuthenticated, IsAuthenticatedOrReadOnly  # type: ignore
 from rest_framework.response import Response  # type: ignore
 from rest_framework.permissions import AllowAny  # type: ignore
+from rest_framework.views import APIView  # type: ignore
 from django.db.transaction import atomic  # type: ignore
 
 from django.core.exceptions import ValidationError  # type: ignore
@@ -18,7 +19,7 @@ from payments.models import PaymentTransaction, PaymentStatus
 from payments.serializers import PaymentTransactionSerializer
 
 from .models import Quote, Booking, RecurringSchedule, BookingStatus, ShippingType, ServiceType
-from .permissions import IsCustomer, IsAdminOrReadOnly
+from .permissions import IsCustomer, IsAdminOrReadOnly, IsDriverOrAdmin  
 from .serializers import (
     QuoteRequestSerializer,
     QuoteSerializer,
@@ -112,8 +113,10 @@ class BookingViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action in ["create", "by_guest", "bulk_upload", "recurring_list", "recurring_create", "retrieve"]:
             return [AllowAny()]
-        if self.action in ["update", "partial_update", "destroy", "assign_driver", "set_status"]:
+        if self.action in ["update", "partial_update", "destroy", "assign_driver"]:
             return [IsAdminOrReadOnly()]
+        if self.action in ["set_status", "proof_of_delivery", "statuses"]:
+            return [IsAuthenticated(), IsDriverOrAdmin()]
         return [IsAuthenticated()]
 
     def get_serializer_class(self):
@@ -244,6 +247,7 @@ class BookingViewSet(viewsets.ModelViewSet):
         if status_value not in BookingStatus.values:
             return Response({"detail": "Invalid status"}, status=400)
         booking.status = status_value
+        booking.updated_at = timezone.now()
         booking.save(update_fields=["status", "updated_at"])
         return Response({"id": str(booking.id), "status": booking.status})
 
@@ -264,6 +268,42 @@ class BookingViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         obj = serializer.save()
         return Response(RecurringScheduleSerializer(obj).data, status=201)
+    
+
+class BookingStatusView(APIView):
+    """
+    API endpoint to fetch all available booking statuses.
+    
+    This view returns a list of booking status choices defined in the BookingStatus model.
+    It is accessible to anyone (AllowAny permission) and is useful for frontend dropdowns or filters.
+    
+    Response format:
+    [
+        {"value": "pending", "label": "Pending"},
+        {"value": "scheduled", "label": "Scheduled"},
+        ...
+    ]
+    """
+    permission_classes = [AllowAny]
+
+    @swagger_auto_schema(
+        responses={200: openapi.Schema(
+            type=openapi.TYPE_ARRAY,
+            items=openapi.Schema(
+                type=openapi.TYPE_OBJECT,
+                properties={
+                    "value": openapi.Schema(type=openapi.TYPE_STRING),
+                    "label": openapi.Schema(type=openapi.TYPE_STRING)
+                }
+            )
+        )}
+    )
+    def get(self, request):
+        statuses = [
+            {"value": value, "label": label} 
+            for value, label in BookingStatus.choices
+        ]
+        return Response(statuses, status=status.HTTP_200_OK)
 
 
 class ShippingTypeViewSet(viewsets.ModelViewSet):
