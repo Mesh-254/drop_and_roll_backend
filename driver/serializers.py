@@ -21,7 +21,8 @@ class DriverAvailabilitySerializer(serializers.ModelSerializer):
 class DriverPayoutSerializer(serializers.ModelSerializer):
     class Meta:
         model = DriverPayout
-        fields = ["id", "amount", "status", "payout_date", "meta", "created_at"]
+        fields = ["id", "amount", "status",
+                  "payout_date", "meta", "created_at"]
         read_only_fields = ["id", "status", "payout_date", "created_at"]
 
 
@@ -32,11 +33,13 @@ class DriverPayoutCreateSerializer(serializers.ModelSerializer):
 
 
 class DriverRatingSerializer(serializers.ModelSerializer):
-    customer_email = serializers.EmailField(source="customer.email", read_only=True)
+    customer_email = serializers.EmailField(
+        source="customer.email", read_only=True)
 
     class Meta:
         model = DriverRating
-        fields = ["id", "driver_profile", "customer", "booking", "rating", "comment", "created_at", "customer_email"]
+        fields = ["id", "driver_profile", "customer", "booking",
+                  "rating", "comment", "created_at", "customer_email"]
         read_only_fields = ["id", "created_at", "customer_email"]
 
     def validate_rating(self, value):
@@ -65,6 +68,31 @@ class DriverDocumentSerializer(serializers.ModelSerializer):
         model = DriverDocument
         fields = ["id", "doc_type", "file", "uploaded_at", "verified", "notes"]
         read_only_fields = ["id", "uploaded_at", "verified"]
+
+    def validate_file(self, value):
+        print(
+            f"Server received file: name={value.name}, content_type={value.content_type}, size={value.size}")
+        allowed_types = ['application/pdf', 'image/jpeg', 'image/png']
+        if value.content_type not in allowed_types:
+            raise serializers.ValidationError(
+                f"Invalid file type. Allowed types are: {', '.join(allowed_types)}"
+            )
+        max_size = 5 * 1024 * 1024
+        if value.size > max_size:
+            raise serializers.ValidationError(
+                f"File size exceeds limit of {max_size / (1024 * 1024)}MB"
+            )
+        return value
+
+    def validate_doc_type(self, value):
+        # Ensure doc_type is one of the expected types
+        allowed_doc_types = ["Driver's License",
+                             "Vehicle Registration", "Insurance"]
+        if value not in allowed_doc_types:
+            raise serializers.ValidationError(
+                f"Invalid document type. Allowed types are: {', '.join(allowed_doc_types)}"
+            )
+        return value
 
 
 class DriverInviteCreateSerializer(serializers.ModelSerializer):
