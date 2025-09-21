@@ -147,7 +147,8 @@ class BookingCreateSerializer(serializers.ModelSerializer):
     pickup_address = AddressSerializer()
     dropoff_address = AddressSerializer()
     quote_id = serializers.UUIDField(write_only=True)
-    guest_email = serializers.EmailField(required=False, write_only=True, allow_null=True)
+    guest_email = serializers.EmailField(
+        required=False, write_only=True, allow_null=True)
 
     class Meta:
         model = Booking
@@ -197,8 +198,9 @@ class BookingCreateSerializer(serializers.ModelSerializer):
         }
         if not user:
             booking_data["guest_identifier"] = f"guest-{uuid.uuid4()}"
-            booking_data["guest_email"] = guest_email.lower() if guest_email else None
-            
+            booking_data["guest_email"] = guest_email.lower(
+            ) if guest_email else None
+
         booking = Booking.objects.create(**booking_data)
         # to add later: confirmation email to guest_email with guest_identifier
         return booking
@@ -235,7 +237,7 @@ class BookingSerializer(serializers.ModelSerializer):
         ]
 
     def get_customer(self, obj):
-        return {"id": str(obj.customer_id), "name": getattr(obj.customer, "full_name", None)}
+        return {"id": str(obj.customer_id), "name": getattr(obj.customer, "full_name", None), "phone": getattr(obj.customer, "phone", None)}
 
 
 class RecurringScheduleSerializer(serializers.ModelSerializer):
