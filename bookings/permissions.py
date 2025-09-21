@@ -30,3 +30,11 @@ class IsOwnerOrAdmin(BasePermission):
         if request.user.is_authenticated and (request.user.is_staff or getattr(request.user, "role", None) == "admin"):
             return True
         return getattr(obj, "customer_id", None) == getattr(request.user, "id", None)
+
+
+class IsDriverOrAdmin(BasePermission):
+    def has_permission(self, request, view):
+        if not request.user.is_authenticated:
+            return False
+        role = getattr(request.user, "role", None)
+        return role in ["driver", "admin"]
