@@ -58,10 +58,12 @@ INSTALLED_APPS = [
     'tracking.apps.TrackingConfig',
     'driver.apps.DriverConfig',
     'payments.apps.PaymentsConfig',
+    'business.apps.BusinessConfig'
 
     'celery',
     'corsheaders',
     'social_django',
+
 ]
 
 MIDDLEWARE = [
@@ -247,7 +249,6 @@ PAYPAL_CANCEL_URL = env("PAYPAL_CANCEL_URL")
 STRIPE_SECRET_KEY = env('STRIPE_SECRET_KEY')
 STRIPE_PUBLISHABLE_KEY = env('STRIPE_PUBLISHABLE_KEY')
 STRIPE_WEBHOOK_SECRET = env('STRIPE_WEBHOOK_SECRET')
-
 
 # ADMIN SITE CUSTOMIZATION SETTINGS WITH UNFOLD
 UNFOLD = {
@@ -506,8 +507,9 @@ def environment_callback(request):
 def badge_callback(request):
     return 3
 
+
 # def permission_callback(request):
 #     return request.user.has_perm("sample_app.change_model")
 
-SITE_URL = env("SITE_URL",default='http://127.0.0.1:8000')
-FRONTEND_URL=env("FRONTEND_URL",default="http://localhost:5173")
+SITE_URL = env("SITE_URL", default='http://127.0.0.1:8000')
+FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:5173")
