@@ -80,7 +80,7 @@ class ForgotPasswordSerializer(serializers.Serializer):
 
 
 class ChangePasswordForgotSerializer(serializers.Serializer):
-    old_password = serializers.CharField(required=False, write_only=True)
+    # old_password = serializers.CharField(required=False, write_only=True)
     new_password = serializers.CharField(required=True, write_only=True, min_length=8)
     uid = serializers.CharField(required=False, write_only=True)  # For reset-password
     token = serializers.CharField(required=False, write_only=True)  # For reset-password

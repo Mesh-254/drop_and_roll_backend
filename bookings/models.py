@@ -264,3 +264,9 @@ class BulkUpload(models.Model):
 
     def __str__(self):
         return f"BulkUpload {self.id} by {self.customer_id}"
+
+
+# ADD Proof of delivery
+class ProofOfDelivery(models.Model):
+    pass
+
