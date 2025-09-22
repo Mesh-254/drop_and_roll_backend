@@ -58,7 +58,7 @@ INSTALLED_APPS = [
     'tracking.apps.TrackingConfig',
     'driver.apps.DriverConfig',
     'payments.apps.PaymentsConfig',
-    'business.apps.BusinessConfig'
+    'business.apps.BusinessConfig',
 
     'celery',
     'corsheaders',

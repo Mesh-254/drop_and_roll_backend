@@ -39,8 +39,9 @@ class ProofOfDeliverySerializer(serializers.ModelSerializer):
     class Meta:
         model = ProofOfDelivery
         fields = [
-            "id", "recipient_name", "recipient_phone", "signed_at", "signature", "photo", "notes"
+            "id", "recipient_name", "recipient_phone", "signed_at", "signature", "photo", "notes","booking"
         ]
+        read_only_fields =["id"]
 
 
 class TrackingSessionSerializer(serializers.ModelSerializer):
