@@ -470,6 +470,27 @@ UNFOLD = {
                     },
                 ],
             },
+            {
+                "title": _("Tracking"),  # Parent item for submenu
+                "icon": "directions_car",  # Valid Material Icon
+                "link": "",  # Empty link for non-clickable parent
+                "separator": True,
+                "collapsible": True,
+                "items": [
+                    {
+                        "title": _("Proof Of Delivery"),
+                        "icon": "directions_car",
+                        "link": reverse_lazy("admin:tracking_proofofdelivery_changelist"),
+                        "permission": lambda request: request.user.is_superuser,
+                    },
+                    {
+                        "title": _("GeoFence"),
+                        "icon": "map",
+                        "link": reverse_lazy("admin:tracking_geofence_changelist"),
+                        "permission": lambda request: request.user.is_superuser,
+                    },
+                ],
+            },
 
         ],
 
