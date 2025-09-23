@@ -58,7 +58,7 @@ INSTALLED_APPS = [
     'tracking.apps.TrackingConfig',
     'driver.apps.DriverConfig',
     'payments.apps.PaymentsConfig',
-    'business.apps.BusinessConfig'
+    'business.apps.BusinessConfig',
 
     'celery',
     'corsheaders',
@@ -474,7 +474,48 @@ UNFOLD = {
                     },
                 ],
             },
-
+            {
+                "title": _("Tracking"),  # Parent item for submenu
+                "icon": "directions_car",  # Valid Material Icon
+                "link": "",  # Empty link for non-clickable parent
+                "separator": True,
+                "collapsible": True,
+                "items": [
+                    {
+                        "title": _("Proof Of Delivery"),
+                        "icon": "directions_car",
+                        "link": reverse_lazy("admin:tracking_proofofdelivery_changelist"),
+                        "permission": lambda request: request.user.is_superuser,
+                    },
+                    {
+                        "title": _("GeoFence"),
+                        "icon": "map",
+                        "link": reverse_lazy("admin:tracking_geofence_changelist"),
+                        "permission": lambda request: request.user.is_superuser,
+                    },
+                ],
+            },
+            {
+                "title": _("Business"),  # Parent item for submenu
+                "icon": "directions_car",  # Valid Material Icon
+                "link": "",  # Empty link for non-clickable parent
+                "separator": True,
+                "collapsible": True,
+                "items": [
+                    {
+                        "title": _("Inquiries"),
+                        "icon": "business_center",
+                        "link": reverse_lazy("admin:business_businessinquiry_changelist"),
+                        "permission": lambda request: request.user.is_superuser,
+                    },
+                    {
+                        "title": _("Pricing"),
+                        "icon": "price_change",
+                        "link": reverse_lazy("admin:business_businesspricing_changelist"),
+                        "permission": lambda request: request.user.is_superuser,
+                    },
+                ],
+            },
         ],
 
     },

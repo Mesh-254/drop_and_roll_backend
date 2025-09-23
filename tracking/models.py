@@ -6,6 +6,8 @@ from django.conf import settings
 from django.db import models
 from django.utils import timezone
 
+from bookings.models import Booking
+
 
 class TrackingStatus(models.TextChoices):
     PENDING = "pending", "Pending"
@@ -90,6 +92,11 @@ class ProofOfDelivery(models.Model):
     signature = models.ImageField(upload_to="tracking/pod/signatures/", blank=True, null=True)
     photo = models.ImageField(upload_to="tracking/pod/photos/", blank=True, null=True)
     notes = models.TextField(blank=True, null=True)
+    booking= models.ForeignKey(Booking,on_delete=models.SET_NULL,blank=True,null=True,related_name="proof_of_delivery")
+    created_at = models.DateTimeField(default=timezone.now)
+
+    def __str__(self):
+        return f"Proof for Booking {self.bookings.id}"
 
 
 class WebhookSubscription(models.Model):
