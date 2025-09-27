@@ -41,35 +41,16 @@ class BusinessInquiry(models.Model):
     email = models.EmailField()
     phone = models.CharField(max_length=20, blank=True, null=True)
     description = models.TextField(blank=True, null=True)
-
-    # Quote-related fields (reusing Quote model fields)
-    shipping_type = models.ForeignKey(ShippingType, on_delete=models.SET_NULL, null=True, blank=True)
-    service_type = models.ForeignKey(ServiceType, on_delete=models.SET_NULL, null=True, blank=True)
-    weight_kg = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
-    distance_km = models.DecimalField(max_digits=7, decimal_places=2, null=True, blank=True)
-    fragile = models.BooleanField(default=False)
-    insurance_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0, blank=True, null=True)
-    dimensions = models.JSONField(default=dict, blank=True)
-
     # Optional addresses
     pickup_address = models.ForeignKey(Address, on_delete=models.SET_NULL, null=True, blank=True,
                                        related_name="business_pickups")
     dropoff_address = models.ForeignKey(Address, on_delete=models.SET_NULL, null=True, blank=True,
                                         related_name="business_dropoffs")
-
     status = models.CharField(max_length=20, choices=BusinessInquiryStatus.choices,
                               default=BusinessInquiryStatus.PENDING)
-
-    # Links to existing Quote and Booking
-    quote = models.OneToOneField(Quote, on_delete=models.SET_NULL, null=True, blank=True,
-                                 related_name="business_inquiry")
-    booking = models.OneToOneField(Booking, on_delete=models.SET_NULL, null=True, blank=True,
-                                   related_name="business_inquiry")
-
     admin_notes = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
-    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="business_inquiries")
 
     class Meta:
         indexes = [

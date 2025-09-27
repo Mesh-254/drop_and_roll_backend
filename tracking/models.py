@@ -85,13 +85,9 @@ class Geofence(models.Model):
 
 class ProofOfDelivery(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    session = models.OneToOneField(TrackingSession, on_delete=models.CASCADE, related_name="pod")
-    recipient_name = models.CharField(max_length=255)
-    recipient_phone = models.CharField(max_length=20, blank=True, null=True)
-    signed_at = models.DateTimeField(default=timezone.now)
-    signature = models.ImageField(upload_to="tracking/pod/signatures/", blank=True, null=True)
     photo = models.ImageField(upload_to="tracking/pod/photos/", blank=True, null=True)
     notes = models.TextField(blank=True, null=True)
+    location=  models.DecimalField(max_digits=9, decimal_places=6, blank=True, null=True)
     booking= models.ForeignKey(Booking,on_delete=models.SET_NULL,blank=True,null=True,related_name="proof_of_delivery")
     created_at = models.DateTimeField(default=timezone.now)
 
