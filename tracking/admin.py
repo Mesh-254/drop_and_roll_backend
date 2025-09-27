@@ -27,10 +27,13 @@ class GeofenceAdmin(ModelAdmin):
     list_filter = ("active",)
     search_fields = ("name",)
 
+
 @admin.register(ProofOfDelivery)
 class ProofOfDeliveryAdmin(ModelAdmin):
-    list_display = ("session", "recipient_name", "signed_at")
-    search_fields = ("session__id", "recipient_name")
+    list_display = ("booking_id", "created_at",  "notes","location","photo","created_at")
+    search_fields = ("booking__id", "notes","location")
+    list_filter = ("created_at","location")
+
 
 @admin.register(WebhookSubscription)
 class WebhookSubscriptionAdmin(admin.ModelAdmin):
