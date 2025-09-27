@@ -162,6 +162,8 @@ class BookingCreateSerializer(serializers.ModelSerializer):
             "scheduled_dropoff_at",
             "promo_code",
             "notes",
+            "receiver_email",
+            "receiver_phone",
         ]
         read_only_fields = ["id"]
 
@@ -182,6 +184,8 @@ class BookingCreateSerializer(serializers.ModelSerializer):
         dropoff_data = validated_data.pop("dropoff_address")
         quote_id = validated_data.pop("quote_id")
         guest_email = validated_data.pop("guest_email", None)
+        receiver_email = validated_data.pop("receiver_email", None)
+        receiver_phone = validated_data.pop("receiver_phone", None)
 
         quote = Quote.objects.get(pk=quote_id)
         pickup = Address.objects.create(**pickup_data)

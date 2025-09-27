@@ -32,7 +32,7 @@ class Address(models.Model):
     region = models.CharField(max_length=120, blank=True, null=True)
     postal_code = models.CharField(max_length=20, blank=True, null=True)
     country = models.CharField(
-        max_length=2, default="KE")  # ISO-3166-1 alpha-2
+        max_length=2, default="GB")  # ISO-3166-1 alpha-2
     latitude = models.DecimalField(
         max_digits=9, decimal_places=6, blank=True, null=True)
     longitude = models.DecimalField(
