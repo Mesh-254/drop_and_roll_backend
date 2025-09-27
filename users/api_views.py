@@ -8,23 +8,22 @@ from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
 from rest_framework import serializers
-from rest_framework import viewsets, status
+from rest_framework import status
+from rest_framework import viewsets
 from rest_framework.decorators import action
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.permissions import AllowAny
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from driver.serializers import DriverProfileSerializer
-from .permissions import IsAdmin, IsDriver, IsCustomer
+from driver.serializers import DriverProfileSerializer  # Assuming this is the correct import
+from .permissions import IsAdmin, IsCustomer, IsDriver
+from .serializers import CustomerProfileSerializer, AdminProfileSerializer
 from .serializers import (
     UserSerializer,
     RegisterSerializer,
     ChangePasswordSerializer,
-    CustomerProfileSerializer,
-
-    AdminProfileSerializer,
-
     LoginSerializer, ForgotPasswordSerializer, ChangePasswordForgotSerializer,
 )
 from .tasks import send_confirmation_email
@@ -271,8 +270,7 @@ class AuthViewSet(viewsets.GenericViewSet):
                 "error": "No account found with this email"
             }, status=status.HTTP_400_BAD_REQUEST)
 
-
-# Forgot password logic
+    # Forgot password logic
 
     @action(methods=["post"], detail=False, url_path="forgot-password", permission_classes=[AllowAny])
     def forgot_password(self, request):
@@ -390,6 +388,60 @@ class AuthViewSet(viewsets.GenericViewSet):
 
 
 class ProfileViewSet(viewsets.GenericViewSet):
+    permission_classes = [IsAuthenticated]
+
+    def get_serializer_class(self):
+        """
+        Return the appropriate serializer class based on the action.
+        """
+        serializer_map = {
+            'customer': CustomerProfileSerializer,
+            'driver': DriverProfileSerializer,
+            'admin': AdminProfileSerializer,
+        }
+        return serializer_map.get(self.action, CustomerProfileSerializer)  # Default to CustomerProfileSerializer
+
+    @action(methods=["get", "patch"], detail=False, url_path="customer",
+            permission_classes=[IsAuthenticated, IsCustomer])
+    def customer(self, request):
+        profile = request.user.customer_profile
+        if request.method == "PATCH":
+            s = CustomerProfileSerializer(
+                profile, data=request.data, partial=True)
+            s.is_valid(raise_exception=True)
+            s.save()
+        else:
+            s = CustomerProfileSerializer(profile)
+        return Response(s.data)
+
+    @action(methods=["get", "patch"], detail=False, url_path="driver",
+            permission_classes=[IsAuthenticated, IsDriver])
+    def driver(self, request):
+        profile = request.user.driver_profile
+        if request.method == "PATCH":
+            s = DriverProfileSerializer(
+                profile, data=request.data, partial=True)
+            s.is_valid(raise_exception=True)
+            s.save()
+        else:
+            s = DriverProfileSerializer(profile)
+        return Response(s.data)
+
+    @action(methods=["get", "patch"], detail=False, url_path="admin",
+            permission_classes=[IsAuthenticated, IsAdmin])
+    def admin(self, request):
+        profile = request.user.admin_profile
+        if request.method == "PATCH":
+            s = AdminProfileSerializer(
+                profile, data=request.data, partial=True)
+            s.is_valid(raise_exception=True)
+            s.save()
+        else:
+            s = AdminProfileSerializer(profile)
+        return Response(s.data)
+
+
+class ProfileViewSet1(viewsets.GenericViewSet):
     permission_classes = [IsAuthenticated]
 
     @action(methods=["get", "patch"], detail=False, url_path="customer",
