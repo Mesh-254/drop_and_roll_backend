@@ -17,6 +17,7 @@ from django.db.models import Avg
 from rest_framework.permissions import IsAdminUser
 from django.db import transaction
 from rest_framework.parsers import MultiPartParser, FormParser
+from django.db.models import Case, When, IntegerField
 
 from bookings.models import Booking, BookingStatus
 from bookings.serializers import BookingSerializer
@@ -260,6 +261,31 @@ class DriverAssignedBookingViewSet(mixins.ListModelMixin, viewsets.GenericViewSe
         user = self.request.user
         driver_id = self.request.query_params.get("driver_id")
         status_param = self.request.query_params.get("status")
+
+        # Filter bookings for the authenticated driver
+        qs = Booking.objects.filter(driver__user=self.request.user).select_related(
+            "pickup_address", "dropoff_address", "customer", "driver", "quote"
+        ).prefetch_related("quote__shipping_type", "quote__service_type")
+
+        # Apply status filter if provided (from frontend statusParam)
+        status_filter = self.request.query_params.get("status", "")
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+
+        # Hybrid ordering: Annotate status priority (lower number = higher priority)
+        qs = qs.annotate(
+            status_priority=Case(
+                When(status=BookingStatus.ASSIGNED, then=0),      # Highest: New assignments
+                When(status=BookingStatus.PICKED_UP, then=1),     # Next: Ready to transit
+                When(status=BookingStatus.IN_TRANSIT, then=2),    # Active: In progress
+                When(status=BookingStatus.DELIVERED, then=3),     # Lower: Completed
+                When(status=BookingStatus.SCHEDULED, then=4),     # Upcoming or pending
+                default=5,                                        # Others (e.g., CANCELLED, FAILED) at bottom
+                output_field=IntegerField()
+            )
+        ).order_by('status_priority', '-updated_at')  # Status priority asc, then most recent updates first
+
+        return qs
 
         active_statuses = [
             BookingStatus.ASSIGNED,
