@@ -87,7 +87,7 @@ class ProofOfDelivery(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     photo = models.ImageField(upload_to="tracking/pod/photos/", blank=True, null=True)
     notes = models.TextField(blank=True, null=True)
-    location=  models.DecimalField(max_digits=9, decimal_places=6, blank=True, null=True)
+    location = models.JSONField(default=dict, blank=True)
     booking= models.ForeignKey(Booking,on_delete=models.SET_NULL,blank=True,null=True,related_name="proof_of_delivery")
     created_at = models.DateTimeField(default=timezone.now)
 
