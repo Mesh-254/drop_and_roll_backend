@@ -43,6 +43,11 @@ class ProofOfDeliverySerializer(serializers.ModelSerializer):
         ]
         read_only_fields =["id","created_at"]
 
+    def validate(self, data):
+        if not data.get("photo"):
+            raise serializers.ValidationError("Photo is required")
+        return data
+
 
 class TrackingSessionSerializer(serializers.ModelSerializer):
     events = TrackingEventSerializer(many=True, read_only=True)
