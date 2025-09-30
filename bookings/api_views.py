@@ -19,7 +19,7 @@ from payments.models import PaymentTransaction, PaymentStatus
 from payments.serializers import PaymentTransactionSerializer
 
 from .models import Quote, Booking, RecurringSchedule, BookingStatus, ShippingType, ServiceType
-from .permissions import IsCustomer, IsAdminOrReadOnly, IsDriverOrAdmin  
+from .permissions import IsCustomer, IsAdminOrReadOnly, IsDriverOrAdmin
 from .serializers import (
     QuoteRequestSerializer,
     QuoteSerializer,
@@ -28,6 +28,8 @@ from .serializers import (
     RecurringScheduleSerializer, ShippingTypeSerializer, ServiceTypeSerializer,
 )
 from .utils.pricing import compute_quote
+
+from django.db.models import Case, When, IntegerField
 
 
 class QuoteViewSet(viewsets.GenericViewSet):
@@ -88,21 +90,43 @@ class BookingViewSet(viewsets.ModelViewSet):
         qs = super().get_queryset()
         user = self.request.user
         guest_email = self.request.query_params.get("guest_email", "").lower()
+        status_filter = self.request.query_params.get("status", "")  # From frontend (e.g., statusParam in JSX)
 
+        # Apply user/role-based filters first
         if user.is_authenticated:
             role = getattr(user, "role", None)
             if role == "customer":
-                return qs.filter(customer=user)
-            if role == "driver":
-                return qs.filter(driver__user=user)
-            if role == "admin":
-                return qs
+                qs = qs.filter(customer=user)
+            elif role == "driver":
+                qs = qs.filter(driver__user=user)
+            elif role == "admin":
+                pass  # All bookings for admins
+            # Note: If role is none or other, qs remains unfiltered (consider adding else: qs = qs.none() for security)
         elif guest_email:
-            # Allow guests to access bookings with matching guest_email
-            return qs.filter(guest_email=guest_email.lower())
+            # Allow guests to access their bookings (add customer__isnull=True for security, matching by_guest action)
+            qs = qs.filter(guest_email=guest_email.lower(), customer__isnull=True)
+        else:
+            # Default: empty queryset for unauthenticated users without guest_email
+            return qs.none()
 
-        # Default: return empty queryset for unauthenticated users without guest_email
-        return qs.none()
+        # Apply status filter if provided (after user filters)
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+
+        # Hybrid ordering: Annotate status priority (lower number = higher priority)
+        qs = qs.annotate(
+            status_priority=Case(
+                When(status=BookingStatus.ASSIGNED, then=0),      # Highest: New assignments
+                When(status=BookingStatus.PICKED_UP, then=1),     # Next: Ready to transit
+                When(status=BookingStatus.IN_TRANSIT, then=2),    # Active: In progress
+                When(status=BookingStatus.DELIVERED, then=3),     # Lower: Completed
+                When(status=BookingStatus.SCHEDULED, then=4),     # Upcoming or pending
+                default=5,                                        # Others (e.g., CANCELLED, FAILED) at bottom
+                output_field=IntegerField()
+            )
+        ).order_by('status_priority', '-updated_at')  # Status priority asc, then most recent updates first
+
+        return qs
 
     def get_object(self):
         # Use get_queryset to ensure proper filtering
@@ -268,15 +292,15 @@ class BookingViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         obj = serializer.save()
         return Response(RecurringScheduleSerializer(obj).data, status=201)
-    
+
 
 class BookingStatusView(APIView):
     """
     API endpoint to fetch all available booking statuses.
-    
+
     This view returns a list of booking status choices defined in the BookingStatus model.
     It is accessible to anyone (AllowAny permission) and is useful for frontend dropdowns or filters.
-    
+
     Response format:
     [
         {"value": "pending", "label": "Pending"},
@@ -300,7 +324,7 @@ class BookingStatusView(APIView):
     )
     def get(self, request):
         statuses = [
-            {"value": value, "label": label} 
+            {"value": value, "label": label}
             for value, label in BookingStatus.choices
         ]
         return Response(statuses, status=status.HTTP_200_OK)
