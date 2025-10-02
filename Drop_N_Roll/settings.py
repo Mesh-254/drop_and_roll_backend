@@ -211,8 +211,8 @@ CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = env("CELERY_TIMEZONE", default="UTC")
 
 # Email backend
-# EMAIL_BACKEND = env("EMAIL_BACKEND", default="django.core.mail.backends.smtp.EmailBackend")
-EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"  # For testing"
+EMAIL_BACKEND = env("EMAIL_BACKEND", default="django.core.mail.backends.smtp.EmailBackend")
+# EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"  # For testing"
 EMAIL_HOST = env("EMAIL_HOST", default="smtp.gmail.com")
 EMAIL_PORT = env("EMAIL_PORT", default=587)
 EMAIL_HOST_USER = env("EMAIL_HOST_USER")
