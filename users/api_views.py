@@ -17,7 +17,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from driver.serializers import DriverProfileSerializer  # Assuming this is the correct import
+# Assuming this is the correct import
+from driver.serializers import DriverProfileSerializer
 from .permissions import IsAdmin, IsCustomer, IsDriver
 from .serializers import CustomerProfileSerializer, AdminProfileSerializer
 from .serializers import (
@@ -26,7 +27,7 @@ from .serializers import (
     ChangePasswordSerializer,
     LoginSerializer, ForgotPasswordSerializer, ChangePasswordForgotSerializer,
 )
-from .tasks import send_confirmation_email
+from .tasks import send_confirmation_email, send_reset_email, send_welcome_email
 
 User = get_user_model()
 
@@ -59,13 +60,15 @@ class GoogleLoginView(APIView):
 
             # Extract user information from the token
             email = idinfo['email'].lower()
-            full_name = f"{idinfo.get('given_name', '')} {idinfo.get('family_name', '')}".strip()
+            full_name = f"{idinfo.get('given_name', '')} {idinfo.get('family_name', '')}".strip(
+            )
 
             # Check if user exists; if not, create a new user
             user, created = User.objects.get_or_create(
                 email=email,
                 defaults={
-                    'full_name': full_name or email.split('@')[0],  # Fallback to email username
+                    # Fallback to email username
+                    'full_name': full_name or email.split('@')[0],
                     'role': User.Role.CUSTOMER,  # Default to customer role
                     'is_active': True  # Google users are auto-verified
                 }
@@ -177,16 +180,33 @@ class AuthViewSet(viewsets.GenericViewSet):
                     recipient_list=[user.email]
                 )
             except Exception as e:
-                # Log the error but don't fail the registration
+                # Log but don't fail registration
                 print(f"Failed to send confirmation email: {str(e)}")
-                # You could add logging here
 
             return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
         except serializers.ValidationError as e:
+            # Extract nested field error (e.g., from validate_email) and return flat response
+            code = "VALIDATION_ERROR"
+            error_msg = "Registration failed"
+            if isinstance(e.detail, dict) and len(e.detail) == 1 and "email" in e.detail:
+                field_error = e.detail["email"]
+                if isinstance(field_error, dict):
+                    code = field_error.get("code", "VALIDATION_ERROR")
+                    error_msg = field_error.get("error", "Registration failed")
+                elif isinstance(field_error, list) and len(field_error) > 0:
+                    # Fallback for raw DRF errors (e.g., unique constraint)
+                    error_msg = str(field_error[0])
+                    if "already exists" in error_msg.lower():
+                        code = "ACCOUNT_ALREADY_EXISTS"
             return Response({
-                "code": e.detail.get("code", "UNKNOWN_ERROR"),
-                "error": e.detail.get("error", "Registration failed")
+                "code": code,
+                "error": error_msg
             }, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({
+                "code": "REGISTER_ERROR",
+                "error": "An unexpected error occurred during registration."
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     # function to confirm email address
 
@@ -194,6 +214,13 @@ class AuthViewSet(viewsets.GenericViewSet):
     def confirm(self, request):
         uid = request.query_params.get("uid")
         token = request.query_params.get("token")
+
+        if not uid or not token:
+            return Response({
+                'code': 'INVALID_CONFIRMATION_LINK',
+                'error': 'Missing uid or token in link.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
         try:
             uid = force_str(urlsafe_base64_decode(uid))
             user = User.objects.get(pk=uid)
@@ -206,19 +233,44 @@ class AuthViewSet(viewsets.GenericViewSet):
         if user.is_active:
             return Response({
                 "code": "ACCOUNT_ALREADY_ACTIVATED",
-                "error": "Account is already activated"
+                "error": "This account is already activated. Please sign in"
             }, status=status.HTTP_400_BAD_REQUEST)
 
         if default_token_generator.check_token(user, token):
             user.is_active = True
             user.save()
+            # NEW: Send welcome email asynchronously after activation
+            try:
+                subject = "Welcome to Drop 'N Roll!"
+                message = (
+                    f"Hi {user.full_name},\n\n"
+                    f"Congratulations on confirming your account ! We're thrilled to welcome you to the Drop 'N Roll family.\n\n"
+                    f"As you embark on this journey with us, we want to assure you that our commitment to your satisfaction is unwavering. "
+                    f"From seamless pickups to reliable deliveries, we strive to deliver quality services that not only meet but exceed your expectations. "
+                    f"We hope every interaction leaves you with a sense of ease and hope for a smoother, more efficient experience ahead.\n\n"
+                    f"Explore our app, place your first order, and let's roll together!\n\n"
+                    f"If you have any questions, our support team is here to help.\n\n"
+                    f"Warm regards,\n"
+                    f"The Drop 'N Roll Team"
+                )
+                send_welcome_email.delay(
+                    subject=subject,
+                    message=message,
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    recipient_list=[user.email]
+                )
+            except Exception as e:
+                # Log but don't fail activation—email is non-critical for core flow
+                # Replace with logger.error() in prod
+                print(f"Failed to send welcome email to {user.email}: {str(e)}")
+
             return Response({
-                "code": "ACCOUNT_ACTIVATED",
-                "detail": "Account successfully activated"
+                'code': 'CONFIRMATION_SUCCESS',
+                'detail': 'Email confirmed successfully. You can now sign in.'
             }, status=status.HTTP_200_OK)
         return Response({
             "code": "INVALID_CONFIRMATION_LINK",
-            "error": "Invalid confirmation link"
+            "error": "Invalid or expired confirmation link. Request a new one from resend page."
         }, status=status.HTTP_400_BAD_REQUEST)
 
     @action(methods=["post"], detail=False, url_path="resend-confirmation", permission_classes=[AllowAny])
@@ -286,13 +338,13 @@ class AuthViewSet(viewsets.GenericViewSet):
             if not user.is_active:
                 return Response({
                     "code": "ACCOUNT_NOT_ACTIVATED",
-                    "error": "Account is not activated"
+                    "error": "Account is not activated. Please check your email for confirmation."
                 }, status=status.HTTP_400_BAD_REQUEST)
 
             token = default_token_generator.make_token(user)
             uid = urlsafe_base64_encode(force_bytes(str(user.pk)))
             subject = "Reset Your Drop 'N Roll Password"
-            reset_link = f"{settings.FRONTEND_URL}/reset-password/?uid={uid}&token={token}"
+            reset_link = f"{settings.FRONTEND_URL}/reset-password/{uid}/{token}"
             message = (
                 f"Hi {user.full_name},\n\n"
                 f"You requested a password reset. Click the link below to set a new password:\n\n"
@@ -307,16 +359,16 @@ class AuthViewSet(viewsets.GenericViewSet):
                 #     from_email=settings.DEFAULT_FROM_EMAIL,
                 #     recipient_list=[user.email]
                 # )
-                send_mail(
+                send_reset_email.delay(
                     subject=subject,
                     message=message,
                     from_email=settings.DEFAULT_FROM_EMAIL,
                     recipient_list=[user.email],
-                    fail_silently=True,
+                    # fail_silently=True,
                 )
                 return Response({
                     "code": "RESET_EMAIL_SENT",
-                    "detail": "Password reset email sent"
+                    "detail": "Password reset email sent. Check your inbox."
                 }, status=status.HTTP_200_OK)
             except Exception as e:
                 return Response({
@@ -343,7 +395,7 @@ class AuthViewSet(viewsets.GenericViewSet):
         except (TypeError, ValueError, OverflowError, User.DoesNotExist):
             return Response({
                 "code": "INVALID_RESET_LINK",
-                "error": "Invalid reset link"
+                "error": "Invalid or expired reset link"
             }, status=status.HTTP_400_BAD_REQUEST)
 
         if default_token_generator.check_token(user, token):
@@ -351,11 +403,11 @@ class AuthViewSet(viewsets.GenericViewSet):
             user.save()
             return Response({
                 "code": "PASSWORD_RESET_SUCCESS",
-                "detail": "Password reset successfully"
+                "detail": "Password reset successfully. You can now log in."
             }, status=status.HTTP_200_OK)
         return Response({
             "code": "INVALID_RESET_LINK",
-            "error": "Invalid reset link"
+            "error": "Invalid or expired reset link"
         }, status=status.HTTP_400_BAD_REQUEST)
 
     @action(
@@ -399,7 +451,8 @@ class ProfileViewSet(viewsets.GenericViewSet):
             'driver': DriverProfileSerializer,
             'admin': AdminProfileSerializer,
         }
-        return serializer_map.get(self.action, CustomerProfileSerializer)  # Default to CustomerProfileSerializer
+        # Default to CustomerProfileSerializer
+        return serializer_map.get(self.action, CustomerProfileSerializer)
 
     @action(methods=["get", "patch"], detail=False, url_path="customer",
             permission_classes=[IsAuthenticated, IsCustomer])
