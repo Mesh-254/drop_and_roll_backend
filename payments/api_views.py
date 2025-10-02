@@ -94,7 +94,14 @@ class PaymentMethodViewSet(viewsets.ModelViewSet):
     serializer_class = PaymentMethodSerializer
 
     def get_queryset(self):
-        return PaymentMethod.objects.filter(user=self.request.user)
+        if getattr(self, 'swagger_fake_view', False):  # Short-circuit during schema gen
+            return PaymentMethod.objects.none()
+        
+        user = self.request.user
+        if not user.is_authenticated:
+            return PaymentMethod.objects.none()  # Or raise PermissionDenied if needed
+        
+        return PaymentMethod.objects.filter(user=user)  # Now safe: user.id is UUID
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
@@ -459,7 +466,14 @@ class WalletViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = WalletSerializer
 
     def get_queryset(self):
-        return Wallet.objects.filter(user=self.request.user)
+        if getattr(self, 'swagger_fake_view', False):
+            return Wallet.objects.none()
+        
+        user = self.request.user
+        if not user.is_authenticated:
+            return Wallet.objects.none()
+        
+        return Wallet.objects.filter(user=user)
 
 
 class RefundViewSet(viewsets.ModelViewSet):
@@ -467,6 +481,9 @@ class RefundViewSet(viewsets.ModelViewSet):
     permission_classes = [IsCustomer | IsAdmin]
 
     def get_queryset(self):
+        if getattr(self, 'swagger_fake_view', False):
+            return Refund.objects.none()
+        
         user = self.request.user
         if user.is_authenticated and user.is_staff:
             return Refund.objects.all()
