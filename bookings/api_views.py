@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from drf_yasg import openapi  # type: ignore
 from drf_yasg.utils import swagger_auto_schema  # type: ignore
-from .tasks import send_booking_confirmation_email, send_reminder
+from .tasks import send_booking_confirmation_email
 from rest_framework import viewsets, status  # type: ignore
 from rest_framework.decorators import action  # type: ignore
 from rest_framework.permissions import IsAuthenticated, IsAuthenticatedOrReadOnly  # type: ignore
@@ -164,8 +164,8 @@ class BookingViewSet(viewsets.ModelViewSet):
                 guest_email=guest_email, customer__isnull=True, status=BookingStatus.PENDING
             ).count()
 
-        if pending_count >= 5:  # Anti-spam limit
-            raise ValidationError("Too many pending bookings.")
+        # if pending_count >= 5:  # Anti-spam limit
+        #     raise ValidationError("Too many pending bookings.")
 
         # Save the booking using serializer's logic
         booking = serializer.save(status=BookingStatus.PENDING,
@@ -190,7 +190,7 @@ class BookingViewSet(viewsets.ModelViewSet):
             status=PaymentStatus.PENDING,
             reference=str(uuid.uuid4())[:12].replace("-", "")
         )
-
+       
         # send_reminder.delay(booking.id, tx.reference, is_initial=True)
         self.tx_data = PaymentTransactionSerializer(tx).data
 
