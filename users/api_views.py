@@ -16,6 +16,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
+from django.db import transaction
 
 # Assuming this is the correct import
 from driver.serializers import DriverProfileSerializer
@@ -28,8 +29,12 @@ from .serializers import (
     LoginSerializer, ForgotPasswordSerializer, ChangePasswordForgotSerializer,
 )
 from .tasks import send_confirmation_email, send_reset_email, send_welcome_email
+import logging
 
 User = get_user_model()
+
+
+logger = logging.getLogger(__name__)
 
 
 class GoogleLoginView(APIView):
@@ -159,29 +164,33 @@ class AuthViewSet(viewsets.GenericViewSet):
         try:
             serializer.is_valid(raise_exception=True)
             user = serializer.save()
-
-            # Send confirmation email
-            try:
+            # Auto-send confirmation email after registration
+            with transaction.atomic():
                 token = default_token_generator.make_token(user)
                 uid = urlsafe_base64_encode(force_bytes(user.pk))
-                subject = "Confirm Your Drop 'N Roll Account"
                 confirmation_link = f"{settings.FRONTEND_URL}/account-confirmed/?uid={uid}&token={token}"
-                message = (
-                    f"Hi {user.full_name},\n\n"
-                    f"Please confirm your email by clicking the link below:\n\n"
-                    f"{confirmation_link}\n\n"
-                    f"If you did not create this account, please ignore this email.\n\n"
-                    f"Best,\nDrop 'N Roll Team"
-                )
-                send_confirmation_email.delay(
-                    subject=subject,
-                    message=message,
-                    from_email=settings.DEFAULT_FROM_EMAIL,
-                    recipient_list=[user.email]
-                )
-            except Exception as e:
-                # Log but don't fail registration
-                print(f"Failed to send confirmation email: {str(e)}")
+
+                subject = "Confirm Your Drop 'N Roll Account"
+                context = {
+                    'full_name': user.full_name,
+                    'email': user.email,
+                    'confirmation_link': confirmation_link,
+                    'support_email': settings.DEFAULT_FROM_EMAIL,
+                    'site_url': getattr(settings, 'SITE_URL', 'http://localhost:8000'),
+                }
+                try:
+                    send_confirmation_email.delay(
+                        subject=subject,
+                        context=context,
+                        from_email=settings.DEFAULT_FROM_EMAIL,
+                        recipient_list=[user.email]
+                    )
+                    logger.info(
+                        f"Confirmation email queued for new user: {user.email}")
+                except Exception as e:
+                    logger.error(
+                        f"Failed to queue confirmation for {user.email}: {str(e)}")
+                    # Don't fail the registration; email is async. User can resend.
 
             return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
         except serializers.ValidationError as e:
@@ -238,31 +247,7 @@ class AuthViewSet(viewsets.GenericViewSet):
 
         if default_token_generator.check_token(user, token):
             user.is_active = True
-            user.save()
-            # NEW: Send welcome email asynchronously after activation
-            try:
-                subject = "Welcome to Drop 'N Roll!"
-                message = (
-                    f"Hi {user.full_name},\n\n"
-                    f"Congratulations on confirming your account ! We're thrilled to welcome you to the Drop 'N Roll family.\n\n"
-                    f"As you embark on this journey with us, we want to assure you that our commitment to your satisfaction is unwavering. "
-                    f"From seamless pickups to reliable deliveries, we strive to deliver quality services that not only meet but exceed your expectations. "
-                    f"We hope every interaction leaves you with a sense of ease and hope for a smoother, more efficient experience ahead.\n\n"
-                    f"Explore our app, place your first order, and let's roll together!\n\n"
-                    f"If you have any questions, our support team is here to help.\n\n"
-                    f"Warm regards,\n"
-                    f"The Drop 'N Roll Team"
-                )
-                send_welcome_email.delay(
-                    subject=subject,
-                    message=message,
-                    from_email=settings.DEFAULT_FROM_EMAIL,
-                    recipient_list=[user.email]
-                )
-            except Exception as e:
-                # Log but don't fail activation—email is non-critical for core flow
-                # Replace with logger.error() in prod
-                print(f"Failed to send welcome email to {user.email}: {str(e)}")
+            user.save()  # Triggers signal for welcome!
 
             return Response({
                 'code': 'CONFIRMATION_SUCCESS',
@@ -289,33 +274,41 @@ class AuthViewSet(viewsets.GenericViewSet):
                     "code": "ACCOUNT_ALREADY_ACTIVATED",
                     "error": "Account is already activated"
                 }, status=status.HTTP_400_BAD_REQUEST)
-            token = default_token_generator.make_token(user)
-            uid = urlsafe_base64_encode(force_bytes(str(user.pk)))
-            subject = "Confirm Your Drop 'N Roll Account"
-            confirmation_link = f"{settings.FRONTEND_URL}/account-confirmed/?uid={uid}&token={token}"
-            message = (
-                f"Hi {user.full_name},\n\n"
-                f"Please confirm your email by clicking the link below:\n\n"
-                f"{confirmation_link}\n\n"
-                f"If you did not create this account, please ignore this email.\n\n"
-                f"Best,\nDrop 'N Roll Team"
-            )
-            try:
-                send_confirmation_email.delay(
-                    subject=subject,
-                    message=message,
-                    from_email=settings.DEFAULT_FROM_EMAIL,
-                    recipient_list=[user.email]
-                )
-                return Response({
-                    "code": "CONFIRMATION_SENT",
-                    "detail": "Confirmation email sent"
-                }, status=status.HTTP_200_OK)
-            except Exception as e:
-                return Response({
-                    "code": "EMAIL_SEND_FAILED",
-                    "error": f"Failed to send confirmation email: {str(e)}"
-                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            with transaction.atomic():
+                # Generate fresh token/UID (idempotent; old ones expire naturally)
+                token = default_token_generator.make_token(user)
+                uid = urlsafe_base64_encode(force_bytes(user.pk))
+                confirmation_link = f"{settings.FRONTEND_URL}/account-confirmed/?uid={uid}&token={token}"
+
+                subject = "Confirm Your Drop 'N Roll Account"
+                context = {
+                    'full_name': user.full_name,
+                    'email': user.email,
+                    'confirmation_link': confirmation_link,
+                    'support_email': settings.DEFAULT_FROM_EMAIL,
+                    'site_url': getattr(settings, 'BACKEND_URL', 'http://localhost:8000'),
+                }
+                try:
+                    send_confirmation_email.delay(
+                        subject=subject,
+                        context=context,
+                        from_email=settings.DEFAULT_FROM_EMAIL,
+                        recipient_list=[user.email]
+                    )
+                    logger.info(f"Resend confirmation queued for {user.email}")
+                    return Response({
+                        "code": "CONFIRMATION_SENT",
+                        "detail": "Confirmation email resent. Check your inbox."
+                    }, status=status.HTTP_200_OK)
+                except Exception as e:
+                    logger.error(
+                        f"Failed to queue resend confirmation for {user.email}: {str(e)}")
+                    return Response({
+                        "code": "EMAIL_ERROR",
+                        "error": "Failed to send email. Try again later."
+                    }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
         except User.DoesNotExist:
             return Response({
                 "code": "EMAIL_NOT_FOUND",
@@ -341,45 +334,47 @@ class AuthViewSet(viewsets.GenericViewSet):
                     "error": "Account is not activated. Please check your email for confirmation."
                 }, status=status.HTTP_400_BAD_REQUEST)
 
-            token = default_token_generator.make_token(user)
-            uid = urlsafe_base64_encode(force_bytes(str(user.pk)))
-            subject = "Reset Your Drop 'N Roll Password"
-            reset_link = f"{settings.FRONTEND_URL}/reset-password/{uid}/{token}"
-            message = (
-                f"Hi {user.full_name},\n\n"
-                f"You requested a password reset. Click the link below to set a new password:\n\n"
-                f"{reset_link}\n\n"
-                f"If you did not request this, please ignore this email.\n\n"
-                f"Best,\nDrop 'N Roll Team"
-            )
-            try:
-                # send_confirmation_email.delay(
-                #     subject=subject,
-                #     message=message,
-                #     from_email=settings.DEFAULT_FROM_EMAIL,
-                #     recipient_list=[user.email]
-                # )
-                send_reset_email.delay(
-                    subject=subject,
-                    message=message,
-                    from_email=settings.DEFAULT_FROM_EMAIL,
-                    recipient_list=[user.email],
-                    # fail_silently=True,
-                )
-                return Response({
-                    "code": "RESET_EMAIL_SENT",
-                    "detail": "Password reset email sent. Check your inbox."
-                }, status=status.HTTP_200_OK)
-            except Exception as e:
-                return Response({
-                    "code": "EMAIL_SEND_FAILED",
-                    "error": f"Failed to send reset email: {str(e)}"
-                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         except User.DoesNotExist:
             return Response({
                 "code": "EMAIL_NOT_FOUND",
                 "error": "No account found with this email"
             }, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            # Generate token/UID
+            token = default_token_generator.make_token(user)
+            uid = urlsafe_base64_encode(force_bytes(user.pk))
+            reset_url = f"{settings.FRONTEND_URL}/reset-password/{uid}/{token}"
+
+            subject = "Password Reset Request"
+            context = {
+                'full_name': user.full_name,  # Use 'user.full_name' in template
+                'email': user.email,
+                'reset_url': reset_url,
+                'site_name': 'Drop \'n Roll',
+                'support_email': settings.DEFAULT_FROM_EMAIL,
+                'expires_in': '24 hours',
+                'site_url': getattr(settings, 'SITE_URL', 'http://localhost:8000'),
+            }
+            try:
+                send_reset_email.delay(
+                    subject=subject,
+                    context=context,
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    recipient_list=[user.email]
+                )
+                logger.info(f"Forgot password queued for {user.email}")
+                return Response({
+                    "code": "RESET_SENT",
+                    "detail": "Check your email for reset instructions."
+                }, status=status.HTTP_200_OK)
+            except Exception as e:
+                logger.error(
+                    f"Failed to queue forgot password for {user.email}: {str(e)}")
+                return Response({
+                    "code": "EMAIL_ERROR",
+                    "error": "Failed to send email. Try again later."
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(methods=["post"], detail=False, url_path="reset-password", permission_classes=[AllowAny])
     def reset_password(self, request):
