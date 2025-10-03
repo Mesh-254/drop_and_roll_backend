@@ -10,8 +10,12 @@ from rest_framework.response import Response  # type: ignore
 from rest_framework.permissions import AllowAny  # type: ignore
 from rest_framework.views import APIView  # type: ignore
 from django.db.transaction import atomic  # type: ignore
+from django.db import transaction  # type: ignore
+import logging  # type: ignore
+from driver.permissions import IsDriver  # type: ignore
+from tracking.models import ProofOfDelivery
 
-from django.core.exceptions import ValidationError  # type: ignore
+
 import uuid
 import shortuuid  # type: ignore
 from django.utils import timezone  # type: ignore
@@ -29,7 +33,9 @@ from .serializers import (
 )
 from .utils.pricing import compute_quote
 
-from django.db.models import Case, When, IntegerField
+from django.db.models import Case, When, IntegerField  # type: ignore
+
+logger = logging.getLogger(__name__)
 
 
 class QuoteViewSet(viewsets.GenericViewSet):
@@ -90,7 +96,8 @@ class BookingViewSet(viewsets.ModelViewSet):
         qs = super().get_queryset()
         user = self.request.user
         guest_email = self.request.query_params.get("guest_email", "").lower()
-        status_filter = self.request.query_params.get("status", "")  # From frontend (e.g., statusParam in JSX)
+        status_filter = self.request.query_params.get(
+            "status", "")  # From frontend (e.g., statusParam in JSX)
 
         # Apply user/role-based filters first
         if user.is_authenticated:
@@ -104,7 +111,8 @@ class BookingViewSet(viewsets.ModelViewSet):
             # Note: If role is none or other, qs remains unfiltered (consider adding else: qs = qs.none() for security)
         elif guest_email:
             # Allow guests to access their bookings (add customer__isnull=True for security, matching by_guest action)
-            qs = qs.filter(guest_email=guest_email.lower(), customer__isnull=True)
+            qs = qs.filter(guest_email=guest_email.lower(),
+                           customer__isnull=True)
         else:
             # Default: empty queryset for unauthenticated users without guest_email
             return qs.none()
@@ -116,15 +124,22 @@ class BookingViewSet(viewsets.ModelViewSet):
         # Hybrid ordering: Annotate status priority (lower number = higher priority)
         qs = qs.annotate(
             status_priority=Case(
-                When(status=BookingStatus.ASSIGNED, then=0),      # Highest: New assignments
-                When(status=BookingStatus.PICKED_UP, then=1),     # Next: Ready to transit
-                When(status=BookingStatus.IN_TRANSIT, then=2),    # Active: In progress
-                When(status=BookingStatus.DELIVERED, then=3),     # Lower: Completed
-                When(status=BookingStatus.SCHEDULED, then=4),     # Upcoming or pending
-                default=5,                                        # Others (e.g., CANCELLED, FAILED) at bottom
+                # Highest: New assignments
+                When(status=BookingStatus.ASSIGNED, then=0),
+                # Next: Ready to transit
+                When(status=BookingStatus.PICKED_UP, then=1),
+                When(status=BookingStatus.IN_TRANSIT,
+                     then=2),    # Active: In progress
+                When(status=BookingStatus.DELIVERED,
+                     then=3),     # Lower: Completed
+                When(status=BookingStatus.SCHEDULED,
+                     then=4),     # Upcoming or pending
+                # Others (e.g., CANCELLED, FAILED) at bottom
+                default=5,
                 output_field=IntegerField()
             )
-        ).order_by('status_priority', '-updated_at')  # Status priority asc, then most recent updates first
+            # Status priority asc, then most recent updates first
+        ).order_by('status_priority', '-updated_at')
 
         return qs
 
@@ -190,7 +205,7 @@ class BookingViewSet(viewsets.ModelViewSet):
             status=PaymentStatus.PENDING,
             reference=str(uuid.uuid4())[:12].replace("-", "")
         )
-       
+
         # send_reminder.delay(booking.id, tx.reference, is_initial=True)
         self.tx_data = PaymentTransactionSerializer(tx).data
 
@@ -270,10 +285,68 @@ class BookingViewSet(viewsets.ModelViewSet):
         status_value = request.data.get("status")
         if status_value not in BookingStatus.values:
             return Response({"detail": "Invalid status"}, status=400)
+
+        # ADD: Immutability check (same as update_status)
+        if booking.status == BookingStatus.DELIVERED:
+            pod_exists = ProofOfDelivery.objects.filter(
+                booking=booking).exists()
+            if pod_exists:
+                return Response({
+                    'code': 'IMMUTABLE_DELIVERY',
+                    'detail': 'Delivery completed with POD submitted. Status cannot be changed.',
+                }, status=status.HTTP_403_FORBIDDEN)
+
+        if status_value != BookingStatus.DELIVERED and booking.status == BookingStatus.DELIVERED:
+            return Response({
+                'code': 'REVERT_FORBIDDEN',
+                'detail': 'Cannot revert delivered booking.',
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Proceed with update
         booking.status = status_value
         booking.updated_at = timezone.now()
         booking.save(update_fields=["status", "updated_at"])
+        logger.info(
+            f"Set status: Booking {booking.id} to {status_value} by {request.user.id}")
         return Response({"id": str(booking.id), "status": booking.status})
+
+    # NEW: Proactive check endpoint (GET for single job)
+    @action(methods=["get"], detail=True, url_path="check-immutable", permission_classes=[IsAuthenticated, IsDriver])
+    def check_immutable(self, request, pk=None):
+        booking = self.get_object()
+        immutable = False
+        reason = None
+        if booking.status == BookingStatus.DELIVERED:
+            pod_exists = ProofOfDelivery.objects.filter(
+                booking=booking).exists()
+            if pod_exists:
+                immutable = True
+                reason = "POD submitted - cannot update"
+        elif booking.status == BookingStatus.DELIVERED:  # Revert block
+            immutable = True
+            reason = "Cannot revert delivered booking"
+        return Response({"immutable": immutable, "reason": reason})
+
+    @action(methods=["post"], detail=False, url_path="bulk-check-immutable", permission_classes=[IsAuthenticated, IsDriver])
+    def bulk_check_immutable(self, request):
+        job_ids = request.data.get('ids', [])
+        if not job_ids:
+            return Response({'error': 'No IDs provided'}, status=400)
+        checks = {}
+        for job_id in job_ids:
+            try:
+                booking = Booking.objects.get(id=job_id, driver=request.user.driver_profile)
+                immutable = False
+                reason = None
+                if booking.status == BookingStatus.DELIVERED:
+                    pod_exists = ProofOfDelivery.objects.filter(booking=booking).exists()
+                    if pod_exists:
+                        immutable = True
+                        reason = "POD submitted - cannot update"
+                checks[str(job_id)] = {'immutable': immutable, 'reason': reason}
+            except Booking.DoesNotExist:
+                checks[str(job_id)] = {'immutable': True, 'reason': 'Not found'}
+        return Response(checks)
 
     @swagger_auto_schema(
         method="get",
@@ -292,6 +365,59 @@ class BookingViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         obj = serializer.save()
         return Response(RecurringScheduleSerializer(obj).data, status=201)
+
+    # For bulk (array of {booking_id, new_status})
+
+    @action(detail=False, methods=['post'], url_path='bulk-update-status', permission_classes=[IsAuthenticated, IsDriver])
+    def bulk_update_status(self, request):
+        updates = request.data.get('updates', [])  # [{booking_id, new_status}]
+        if not updates:
+            return Response({'error': 'No updates provided'}, status=status.HTTP_400_BAD_REQUEST)
+
+        results = {'success': [], 'skipped': [], 'errors': []}
+        with transaction.atomic():
+            for update in updates:
+                booking_id = update.get('booking_id')
+                new_status = update.get('new_status')
+
+                try:
+                    booking = Booking.objects.get(
+                        id=booking_id, driver=request.user.driver_profile)
+
+                    # Same validation as single
+                    if booking.status == BookingStatus.DELIVERED:
+                        pod_exists = ProofOfDelivery.objects.filter(
+                            booking=booking).exists()
+                        if pod_exists:
+                            results['skipped'].append({
+                                'booking_id': booking_id,
+                                'reason': 'POD submitted - immutable'
+                            })
+                            continue
+
+                    if new_status != BookingStatus.DELIVERED and booking.status == BookingStatus.DELIVERED:
+                        results['skipped'].append({
+                            'booking_id': booking_id,
+                            'reason': 'Cannot revert delivered'
+                        })
+                        continue
+
+                    # Update
+                    booking.status = new_status
+                    booking.save()
+                    results['success'].append(booking_id)
+                    logger.info(
+                        f"Bulk: Driver {request.user.id} updated {booking_id} to {new_status}")
+
+                except Booking.DoesNotExist:
+                    results['errors'].append(
+                        {'booking_id': booking_id, 'reason': 'Not found'})
+
+        message = f"Updated {len(results['success'])}/{len(updates)} jobs. Skipped {len(results['skipped'])}."
+        if results['skipped']:
+            message += " Some deliveries have POD submitted and cannot be changed."
+
+        return Response({'detail': message, 'results': results}, status=status.HTTP_200_OK if results['success'] else status.HTTP_400_BAD_REQUEST)
 
 
 class BookingStatusView(APIView):
