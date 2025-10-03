@@ -13,6 +13,9 @@ from django.utils import timezone
 from driver.models import DriverInvitation
 from driver.models import DriverProfile
 from .models import CustomerProfile, AdminProfile
+from .tasks import send_confirmation_email, send_reset_email, send_welcome_email
+from django.dispatch import Signal
+
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -58,7 +61,8 @@ def send_driver_invitation_on_create(sender, instance, created, **kwargs):
             email=instance.email, status=DriverInvitation.Status.PENDING
         ).first()
         if existing_invitation and not existing_invitation.is_expired():
-            logger.warning(f"Active invitation already exists for {instance.email}")
+            logger.warning(
+                f"Active invitation already exists for {instance.email}")
             return
 
         # Create invitation
@@ -93,4 +97,59 @@ def send_driver_invitation_on_create(sender, instance, created, **kwargs):
             )
             logger.info(f"Invitation sent to {instance.email}")
         except Exception as e:
-            logger.error(f"Failed to send invitation to {instance.email}: {str(e)}")
+            logger.error(
+                f"Failed to send invitation to {instance.email}: {str(e)}")
+
+
+@receiver(pre_save, sender=User)
+def capture_old_user_state(sender, instance, **kwargs):
+    """
+    Capture old state before save to detect changes in post_save.
+    Mimics payments' capture_old_status for clean delta detection.
+    """
+    if instance.pk:
+        try:
+            old_instance = sender.objects.get(pk=instance.pk)
+            instance._old_role = old_instance.role
+            instance._old_is_active = old_instance.is_active
+        except sender.DoesNotExist:
+            instance._old_role = None
+            instance._old_is_active = None
+    else:
+        instance._old_role = None
+        instance._old_is_active = None
+
+
+@receiver(post_save, sender=User)
+def send_welcome_on_activation(sender, instance: User, created, **kwargs):
+    """
+    Send welcome email on activation change (to True).
+    Only for customers; fires on save if delta detected.
+    """
+    if created or instance.role != User.Role.CUSTOMER:
+        # No email on create (use confirmation flow); skip non-customers
+        return
+
+    old_active = getattr(instance, '_old_is_active', False)
+    if instance.is_active and not old_active:
+        # Activated (e.g., via confirmation or admin toggle)
+        try:
+            subject = "Welcome to Drop 'N Roll!"
+            context = {
+                'full_name': instance.full_name,
+                'email': instance.email,
+                'site_name': 'Drop \'n Roll',
+                'support_email': settings.DEFAULT_FROM_EMAIL,
+                'site_url': getattr(settings, 'FRONTEND_URL'),
+            }
+            send_welcome_email.delay(
+                subject=subject,
+                context=context,
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[instance.email]
+            )
+            logger.info(
+                f"Welcome email queued for activated customer: {instance.email}")
+        except Exception as e:
+            logger.error(
+                f"Failed to queue welcome email for {instance.email}: {str(e)}")
