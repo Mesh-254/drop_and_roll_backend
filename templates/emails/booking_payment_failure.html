@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Payment Issue - Drop 'N Roll</title>
+</head>
+
+<body style="margin: 0; padding: 0; background-color: #f4f4f4; font-family: Arial, sans-serif;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #f4f4f4;">
+    <tr>
+      <td style="padding: 20px 0;">
+        <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" align="center"
+          style="background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+          <!-- Header -->
+          <tr>
+            <td
+              style="padding: 40px 40px 20px; text-align: center; background-color: #f44336; border-radius: 8px 8px 0 0;">
+              <h1 style="margin: 0; color: #ffffff; font-size: 24px; font-weight: bold;">Booking #{{ booking.id }} –
+                Payment Issue</h1>
+            </td>
+          </tr>
+          <!-- Body -->
+          <tr>
+            <td style="padding: 40px; color: #333333; line-height: 1.6; font-size: 16px;">
+              <h2 style="margin: 0 0 20px; color: #f44336; font-size: 20px;">Booking Details:</h2>
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="10" border="0"
+                style="margin-bottom: 20px; border: 1px solid #e9ecef; border-radius: 4px;">
+                <tr>
+                  <td style="border-bottom: 1px solid #e9ecef; font-weight: bold;">Pickup:</td>
+                  <td>{{ booking.pickup_address.line1 }}, {{ booking.pickup_address.city }}</td>
+                </tr>
+                <tr>
+                  <td style="border-bottom: 1px solid #e9ecef; font-weight: bold;">Dropoff:</td>
+                  <td>{{ booking.dropoff_address.line1 }}, {{ booking.dropoff_address.city }}</td>
+                </tr>
+                <tr>
+                  <td style="font-weight: bold;">Total:</td>
+                  <td style="color: #f44336; font-weight: bold;">£{{ booking.final_price }}</td>
+                </tr>
+              </table>
+              <p style="margin: 0 0 20px; font-size: 18px; color: #f44336; font-weight: bold;">Payment Failed: {{
+                failure_reason }} (Ref: {{ payment.reference }})</p>
+              <p style="margin: 0 0 30px; font-size: 16px; color: #666666;">Your booking is on hold. Create a new one <a
+                  href="{{ new_booking_url }}" style="color: #2196F3; text-decoration: none;">here</a> or contact {{
+                support_email }} for help.</p>
+              <!-- CTA Button -->
+              <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: 0 auto 30px;">
+                <tr>
+                  <td style="background-color: #2196F3; border-radius: 5px; text-align: center;">
+                    <a href="{{ new_booking_url }}"
+                      style="display: inline-block; padding: 15px 30px; color: #ffffff; text-decoration: none; font-weight: bold; font-size: 16px;">Create
+                      New Booking</a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <!-- Footer -->
+          <tr>
+            <td
+              style="padding: 20px 40px; text-align: center; background-color: #f8f9fa; border-radius: 0 0 8px 8px; border-top: 1px solid #e9ecef;">
+              <p style="margin: 0; color: #666666; font-size: 12px;">The Drop 'N Roll Team | {{ email }} | {{
+                site_url }}</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+
+</html>

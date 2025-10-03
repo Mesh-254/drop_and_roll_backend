@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Confirm Your Drop 'N Roll Account</title>
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;700&family=Poppins:wght@400;600&display=swap" rel="stylesheet">
+</head>
+<body style="margin: 0; padding: 0; font-family: 'Montserrat', 'Poppins', sans-serif; background-color: #FFFFFF; color: #000000;">
+    <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width: 600px; margin: 0 auto; background-color: #FFFFFF; border-radius: 10px; box-shadow: 0 4px 20px rgba(255,107,53,0.15); overflow: hidden;">
+        <!-- Header: Orange BG, Black Text -->
+        <tr>
+            <td style="padding: 40px 30px; text-align: center; background-color: #FF6B35;">
+                <h1 style="margin: 0; color: #000000; font-size: 32px; font-weight: 700; font-family: 'Montserrat', sans-serif; letter-spacing: 1px;">Drop 'N Roll</h1>
+                <p style="margin: 10px 0 0; color: #000000; font-size: 18px; font-weight: 600; font-family: 'Poppins', sans-serif;">Confirm Your Account</p>
+            </td>
+        </tr>
+        <!-- Body: White BG, Black Text -->
+        <tr>
+            <td style="padding: 40px 30px; text-align: center; background-color: #FFFFFF;">
+                <h2 style="margin: 0 0 20px; color: #000000; font-size: 24px; font-weight: 700; font-family: 'Montserrat', sans-serif;">Hi {{ user.full_name }},</h2>
+                <p style="margin: 0 0 30px; color: #000000; font-size: 16px; line-height: 1.6; font-family: 'Poppins', sans-serif;">
+                    Please confirm your email by clicking the link below:
+                </p>
+                <a href="{{ confirmation_link }}" style="display: inline-block; padding: 15px 40px; background-color: #FF6B35; color: #FFFFFF; text-decoration: none; border-radius: 50px; font-size: 16px; font-weight: 600; font-family: 'Poppins', sans-serif; letter-spacing: 0.5px; transition: background-color 0.3s;">Confirm My Account</a>
+                <p style="margin: 30px 0 0; color: #000000; font-size: 14px; line-height: 1.5; font-style: italic; font-family: 'Poppins', sans-serif;">
+                    If you did not create this account, please ignore this email.
+                </p>
+            </td>
+        </tr>
+        <!-- Footer: Black on White -->
+        <tr>
+            <td style="padding: 30px; text-align: center; background-color: #FFFFFF; border-top: 1px solid #FF6B35;">
+                <p style="margin: 0 0 10px; color: #000000; font-size: 16px; font-weight: 600; font-family: 'Poppins', sans-serif;">Best,<br><strong>The Drop 'N Roll Team</strong></p>
+                <p style="margin: 0; color: #000000; font-size: 14px; font-family: 'Montserrat', sans-serif;">{{ support_email }} | {{ site_url }}</p>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>
