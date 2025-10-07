@@ -7,11 +7,12 @@ from django.db import transaction  # type: ignore
 import uuid
 import shortuuid  # type: ignore
 from decimal import Decimal
-
+import re
+from django.db import transaction as db_transaction  # type: ignore
 from rest_framework.views import APIView  # type: ignore
 
+
 import requests
-import json
 import base64
 import zlib
 from cryptography.hazmat.primitives.asymmetric import padding
@@ -22,9 +23,10 @@ from cryptography.hazmat.backends import default_backend
 from bookings.models import BookingStatus
 from .models import PaymentMethod, PaymentMethodType, PaymentTransaction, Wallet, Refund, PaymentStatus
 from .serializers import PaymentMethodSerializer, PaymentTransactionSerializer, WalletSerializer, RefundSerializer
-from .permissions import IsCustomer, IsAdmin
+from .permissions import IsAdmin
 import logging
-from rest_framework.permissions import IsAuthenticated, AllowAny  # type: ignore
+from rest_framework.permissions import AllowAny  # type: ignore
+from .tasks import send_refund_notification_email  # type: ignore
 
 import stripe  # type: ignore
 from django.views.decorators.csrf import csrf_exempt  # type: ignore
@@ -96,12 +98,13 @@ class PaymentMethodViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         if getattr(self, 'swagger_fake_view', False):  # Short-circuit during schema gen
             return PaymentMethod.objects.none()
-        
+
         user = self.request.user
         if not user.is_authenticated:
             return PaymentMethod.objects.none()  # Or raise PermissionDenied if needed
-        
-        return PaymentMethod.objects.filter(user=user)  # Now safe: user.id is UUID
+
+        # Now safe: user.id is UUID
+        return PaymentMethod.objects.filter(user=user)
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
@@ -154,23 +157,25 @@ class PaymentTransactionViewSet(viewsets.ModelViewSet):
                 f"Transaction {tx.id} marked success, booking {tx.booking.id} scheduled with tracking {tx.booking.tracking_number}")
         return Response(PaymentTransactionSerializer(tx).data)
 
+    # paypal initiate trascation function
     @action(methods=['post'], detail=True, url_path='initiate')
     def initiate_transaction(self, request, pk=None):
         try:
             transaction = self.get_object()
             if transaction.status != PaymentStatus.PENDING:
-                logger.warning(
-                    f"Transaction {pk} is not pending: {transaction.status}")
-                return Response({"success": False, "error": "Transaction is not pending"}, status=status.HTTP_400_BAD_REQUEST)
+                logger.warning(f"Transaction {pk} is not pending: {transaction.status}")
+                return Response({"error": "Transaction is not pending"}, status=status.HTTP_400_BAD_REQUEST)
 
-            exchange_rate_kes_to_usd = Decimal('0.00775')
-            usd_amount = transaction.amount * exchange_rate_kes_to_usd
-            usd_amount_str = f"{usd_amount:.2f}"
+            # Use GBP directly (no conversion needed for PayPal)
+            gbp_amount_str = f"{transaction.amount:.2f}"
+            if transaction.amount <= 0:
+                logger.error(f"Invalid GBP amount for {pk}: {gbp_amount_str} (currency: {transaction.currency or 'GBP'})")
+                return Response({"error": "Transaction amount must be greater than zero"}, status=status.HTTP_400_BAD_REQUEST)
 
-            if usd_amount <= 0:
-                logger.error(
-                    f"Invalid transaction amount for {pk}: {usd_amount_str} USD (KSh {transaction.amount})")
-                return Response({"success": False, "error": "Transaction amount must be greater than zero"}, status=status.HTTP_400_BAD_REQUEST)
+            # Ensure currency is GBP
+            if transaction.currency != 'GBP':
+                logger.warning(f"Transaction {pk} currency is {transaction.currency}, but PayPal initiation requires GBP. Skipping conversion.")
+                return Response({"error": "Transaction currency must be GBP for PayPal"}, status=status.HTTP_400_BAD_REQUEST)
 
             access_token = get_access_token()
             url = f"{settings.PAYPAL_API_URL}/v2/checkout/orders"
@@ -182,36 +187,65 @@ class PaymentTransactionViewSet(viewsets.ModelViewSet):
                 "intent": "CAPTURE",
                 "purchase_units": [{
                     "amount": {
-                        "currency_code": "USD",
-                        "value": usd_amount_str
+                        "currency_code": "GBP",
+                        "value": gbp_amount_str
                     },
-                    "description": f"Payment for booking {transaction.booking.id if transaction.booking else 'N/A'}",
-                    "custom_id": transaction.reference  # Add custom_id for fallback lookup
+                    "description": f"Payment for booking {transaction.booking.id if transaction.booking else 'Wallet'}",
+                    "custom_id": transaction.reference  # For fallback lookup
                 }],
                 "application_context": {
                     "return_url": f"{settings.PAYPAL_RETURN_URL}/{transaction.id}",
                     "cancel_url": f"{settings.PAYPAL_CANCEL_URL}/{transaction.id}?cancelled=true",
-                    "brand_name": "Drop and Roll",
+                    "brand_name": "Drop and Roll",  # Your app name
                     "landing_page": "BILLING",
                     "user_action": "PAY_NOW"
                 }
             }
             response = requests.post(url, headers=headers, json=body)
+            
+            # Always log response for debugging
+            logger.info(f"PayPal order request for tx {transaction.id}: Status {response.status_code}, Body: {response.text}")
+
             try:
                 response.raise_for_status()
                 order_data = response.json()
-                transaction.metadata['paypal_order_id'] = order_data['id']
-                transaction.save(update_fields=['metadata'])
-                logger.info(
-                    f"Initiated PayPal order {order_data['id']} for transaction {transaction.id}")
-                return Response({"success": True, "links": order_data.get('links', [])}, status=status.HTTP_200_OK)
-            except requests.exceptions.RequestException as e:
-                logger.error(
-                    f"PayPal order creation failed for transaction {pk}: {str(e)} - Response: {response.text}")
-                return Response({"success": False, "error": "Failed to initiate PayPal order"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                
+                # Update transaction
+                metadata = transaction.metadata or {}
+                if isinstance(metadata, str):
+                    import json
+                    metadata = json.loads(metadata)
+                metadata.update({
+                    'gateway': 'paypal',
+                    'paypal_order_id': order_data['id'],
+                    'gbp_amount': gbp_amount_str  # Track GBP amount
+                })
+                transaction.metadata = metadata
+                transaction.gateway_response = order_data  # Store full response
+                transaction.save(update_fields=['metadata', 'gateway_response'])
+                
+                logger.info(f"PayPal order {order_data['id']} created for tx {transaction.id}")
+                
+                # Extract approval URL
+                approval_url = next((link['href'] for link in order_data.get('links', []) if link['rel'] == 'approve'), None)
+                return Response({
+                    "success": True, 
+                    "approval_url": approval_url,
+                    "order_id": order_data['id'],
+                    "links": order_data.get('links', [])
+                }, status=status.HTTP_200_OK)
+                
+            except requests.exceptions.HTTPError as e:
+                error_detail = response.json() if response.text else str(e)
+                logger.error(f"PayPal order creation failed for tx {pk}: {str(e)} - Detail: {error_detail}")
+                return Response({
+                    "error": "Failed to initiate PayPal order", 
+                    "detail": error_detail
+                }, status=status.HTTP_400_BAD_REQUEST)  # 400 for client errors like invalid amount
+
         except Exception as e:
-            logger.error(f"Error initiating transaction {pk}: {str(e)}")
-            return Response({"success": False, "error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            logger.error(f"Unexpected error in initiate_transaction for {pk}: {str(e)}")
+            return Response({"error": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @api_view(['POST'])
     def cancel_transaction(request, tx_id):
@@ -232,58 +266,86 @@ class PaymentTransactionViewSet(viewsets.ModelViewSet):
         except Exception as e:
             logger.error(f"Error cancelling transaction {tx_id}: {str(e)}")
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    # Add this to payments/api_views.py, inside PaymentTransactionViewSet
 
     @action(methods=['post'], detail=True, url_path='capture')
     def capture_transaction(self, request, pk=None):
+        transaction = self.get_object()
+        if transaction.status != PaymentStatus.PENDING:
+            logger.warning(
+                f"Transaction {pk} is not pending: {transaction.status}")
+            return Response({"success": False, "error": "Transaction is not pending"}, status=status.HTTP_400_BAD_REQUEST)
+
+        metadata = transaction.metadata
+        if isinstance(metadata, str):
+            import json
+            metadata = json.loads(metadata)
+        order_id = metadata.get('paypal_order_id')
+        if not order_id:
+            logger.error(f"No PayPal order ID found for transaction {pk}")
+            return Response({"success": False, "error": "No PayPal order ID found"}, status=status.HTTP_400_BAD_REQUEST)
+
+        access_token = get_access_token()
+        url = f"{settings.PAYPAL_API_URL}/v2/checkout/orders/{order_id}/capture"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {access_token}",
+        }
+        response = requests.post(url, headers=headers)
         try:
-            transaction = self.get_object()
-            if transaction.status != PaymentStatus.PENDING:
-                logger.warning(
-                    f"Transaction {pk} is not pending: {transaction.status}")
-                return Response({"success": False, "error": "Transaction is not pending"}, status=status.HTTP_400_BAD_REQUEST)
-
-            order_id = transaction.metadata.get('paypal_order_id')
-            if not order_id:
-                logger.error(f"No PayPal order ID found for transaction {pk}")
-                return Response({"success": False, "error": "No PayPal order ID found"}, status=status.HTTP_400_BAD_REQUEST)
-
-            access_token = get_access_token()
-            url = f"{settings.PAYPAL_API_URL}/v2/checkout/orders/{order_id}/capture"
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {access_token}",
-            }
-            response = requests.post(url, headers=headers)
-            try:
-                response.raise_for_status()
-                capture_data = response.json()
-                transaction.status = PaymentStatus.SUCCESS
-                transaction.gateway_response = dict(capture_data)
-                transaction.metadata['capture_id'] = capture_data.get('id')
-                transaction.save(
-                    update_fields=["status", "gateway_response", "metadata"])
-
-                if transaction.booking:
-                    transaction.booking.status = BookingStatus.SCHEDULED
-                    transaction.booking.tracking_number = f"BK-{shortuuid.uuid()[:8].upper()}"
-                    transaction.booking.save(
-                        update_fields=["status", "tracking_number"])
-                    logger.info(
-                        f"Captured transaction {transaction.id}, set booking {transaction.booking.id} to SCHEDULED with tracking {transaction.booking.tracking_number}")
-                return Response(PaymentTransactionSerializer(transaction).data, status=status.HTTP_200_OK)
-            except requests.exceptions.RequestException as e:
+            response.raise_for_status()
+            capture_data = response.json()
+            # Extract actual capture ID from nested structure
+            captures = capture_data.get('purchase_units', [{}])[
+                0].get('payments', {}).get('captures', [])
+            if not captures:
                 logger.error(
-                    f"PayPal capture failed for transaction {pk}: {str(e)} - Response: {response.text}")
-                transaction.status = PaymentStatus.FAILED
-                transaction.gateway_response = {
-                    "error": response.text if 'response' in locals() else str(e)}
-                transaction.save(update_fields=["status", "gateway_response"])
-                return Response({"success": False, "error": "Capture failed"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        except Exception as e:
-            logger.error(f"Error capturing transaction {pk}: {str(e)}")
-            return Response({"success": False, "error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                    f"No captures found in response for transaction {pk}")
+                return Response({"success": False, "error": "No capture in response"}, status=status.HTTP_400_BAD_REQUEST)
+            # First (and usually only) capture
+            capture_id = captures[0]['id']
 
+            # Ensure gateway in metadata and set capture_id
+            metadata.update({
+                'gateway': 'paypal',
+                'capture_id': capture_id
+            })
+            transaction.metadata = metadata
+            transaction.status = PaymentStatus.SUCCESS
+            transaction.gateway_response = dict(capture_data)
+            transaction.save(
+                update_fields=["status", "gateway_response", "metadata"])
+
+            if transaction.booking:
+                transaction.booking.status = BookingStatus.SCHEDULED
+                transaction.booking.tracking_number = f"BK-{shortuuid.uuid()[:8].upper()}"
+                transaction.booking.save(
+                    update_fields=["status", "tracking_number"])
+                logger.info(
+                    f"Captured transaction {transaction.id}, set booking {transaction.booking.id} to SCHEDULED with tracking {transaction.booking.tracking_number}")
+
+            return Response(PaymentTransactionSerializer(transaction).data, status=status.HTTP_200_OK)
+        except requests.exceptions.HTTPError as e:
+            logger.error(
+                f"PayPal capture failed for transaction {pk}: {str(e)} - Response: {response.text}")
+            if not transaction.gateway_response:
+                transaction.gateway_response = {}
+            transaction.gateway_response['error'] = response.text
+            transaction.status = PaymentStatus.FAILED
+            transaction.save(update_fields=["status", "gateway_response"])
+            return Response({"success": False, "error": "Capture failed"}, status=e.response.status_code)
+        except requests.exceptions.RequestException as e:
+            logger.error(
+                f"PayPal capture request failed for transaction {pk}: {str(e)}")
+            if not transaction.gateway_response:
+                transaction.gateway_response = {}
+            transaction.gateway_response['error'] = str(e)
+            transaction.status = PaymentStatus.FAILED
+            transaction.save(update_fields=["status", "gateway_response"])
+            return Response({"success": False, "error": "Capture request failed"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        except Exception as e:
+            logger.error(
+                f"Unexpected error capturing transaction {pk}: {str(e)}")
+            return Response({"success": False, "error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     # STRIPE PAYMENT HANDLER
 
     @action(methods=['post'], detail=True, url_path='initiate-stripe')
@@ -337,6 +399,8 @@ class PaymentTransactionViewSet(viewsets.ModelViewSet):
             return Response({"success": False, "error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 # stripe webhook callback handler
+
+
 @csrf_exempt
 def stripe_webhook(request):
     payload = request.body
@@ -392,9 +456,25 @@ def stripe_webhook(request):
     return HttpResponse(status=200)
 
 # paypal webhook callback handler
+
+
 class PaymentCallbackView(APIView):
     authentication_classes = []
     permission_classes = []
+
+    def _extract_order_id(self, resource):
+        """Helper: Extract order_id from resource.links 'up' rel."""
+        links = resource.get('links', [])
+        up_link = next(
+            (link for link in links if link.get('rel') == 'up'), None)
+        if up_link:
+            href = up_link.get('href', '')
+            # Parse /v2/checkout/orders/{order_id} – flexible regex
+            match = re.search(r'/orders/([A-Z0-9]{10,20})', href)
+            if match:
+                return match.group(1)
+        # Fallback (rare): supplementary_data
+        return resource.get('supplementary_data', {}).get('related_ids', {}).get('order_id')
 
     def post(self, request):
         if not verify_webhook_signature(request, settings.PAYPAL_WEBHOOK_ID):
@@ -405,61 +485,138 @@ class PaymentCallbackView(APIView):
         event_type = data.get('event_type')
         resource = data.get('resource')
         logger.debug(
-            f"Received PayPal webhook event: {event_type}, resource: {json.dumps(resource, indent=2)}")
+            f"Received PayPal webhook event: {event_type}, resource ID: {resource.get('id') if resource else 'None'}")
 
-        if event_type == 'PAYMENT.CAPTURE.COMPLETED':
-            order_id = resource.get('supplementary_data', {}).get(
-                'related_ids', {}).get('order_id') or resource.get('id')
+        with db_transaction.atomic():
             try:
-                tx = PaymentTransaction.objects.filter(
-                    metadata__paypal_order_id=order_id).first()
-                if not tx:
+                if event_type == 'PAYMENT.CAPTURE.COMPLETED':
+                    order_id = self._extract_order_id(resource)
+                    if not order_id:
+                        logger.error(
+                            f"No order_id found in webhook resource links or supplementary_data")
+                        return Response({"error": "No order_id in payload"}, status=status.HTTP_400_BAD_REQUEST)
+
                     tx = PaymentTransaction.objects.filter(
-                        reference=resource.get('custom_id') or order_id).first()
-                if not tx:
-                    logger.error(
-                        f"Transaction not found for order_id {order_id}")
-                    return Response({"error": "Transaction not found"}, status=status.HTTP_400_BAD_REQUEST)
-                if tx.status != PaymentStatus.PENDING:
-                    logger.warning(
-                        f"Transaction {tx.id} already processed: {tx.status}")
-                    return Response({"message": "Already processed"}, status=status.HTTP_200_OK)
+                        metadata__paypal_order_id=order_id).first()
+                    if not tx:
+                        # Fallback to custom_id (if present, though rare in capture resource)
+                        custom_id = resource.get('custom_id')
+                        if custom_id:
+                            tx = PaymentTransaction.objects.filter(
+                                reference=custom_id).first()
+                    if not tx:
+                        logger.error(
+                            f"Transaction not found for order_id {order_id}")
+                        return Response({"error": "Transaction not found"}, status=status.HTTP_400_BAD_REQUEST)
 
-                tx.status = PaymentStatus.SUCCESS
-                tx.gateway_response = dict(resource)
-                tx.metadata['capture_id'] = resource['id']
-                tx.save(update_fields=[
-                        "status", "gateway_response", "metadata"])
+                    if tx.status != PaymentStatus.PENDING:
+                        logger.warning(
+                            f"Transaction {tx.id} already processed: {tx.status}")
+                        return Response({"message": "Already processed"}, status=status.HTTP_200_OK)
 
-                if tx.booking:
-                    tx.booking.status = BookingStatus.SCHEDULED
-                    tx.booking.tracking_number = f"BK-{shortuuid.uuid()[:8].upper()}"
-                    tx.booking.save(
-                        update_fields=["status", "tracking_number"])
+                    # Update tx
+                    tx.status = PaymentStatus.SUCCESS
+                    tx.gateway_response = dict(resource)
+                    if isinstance(tx.metadata, str):
+                        import json
+                        tx.metadata = json.loads(tx.metadata)
+                    tx.metadata.update({
+                        'gateway': 'paypal',
+                        'capture_id': resource['id']
+                    })
+                    tx.save(update_fields=[
+                            "status", "gateway_response", "metadata"])
+
+                    # Update booking if present
+                    if tx.booking:
+                        tx.booking.status = BookingStatus.SCHEDULED
+                        tx.booking.tracking_number = f"BK-{shortuuid.uuid()[:8].upper()}"
+                        tx.booking.save(
+                            update_fields=["status", "tracking_number"])
+                        logger.info(
+                            f"Webhook updated tx {tx.id} to SUCCESS, booking {tx.booking.id} to SCHEDULED (tracking: {tx.booking.tracking_number})")
+
+                elif event_type == 'PAYMENT.CAPTURE.DENIED':
+                    order_id = self._extract_order_id(resource)
+                    if not order_id:
+                        logger.warning(
+                            "No order_id for DENIED event; skipping detailed update")
+                        return Response({"message": "Webhook processed"}, status=status.HTTP_200_OK)
+
+                    tx = PaymentTransaction.objects.filter(
+                        metadata__paypal_order_id=order_id).first()
+                    if tx and tx.status == PaymentStatus.PENDING:
+                        tx.status = PaymentStatus.FAILED
+                        tx.gateway_response = dict(resource)
+                        tx.save(update_fields=["status", "gateway_response"])
+                        logger.info(
+                            f"Webhook set tx {tx.id} to FAILED (DENIED)")
+
+                elif event_type == 'PAYMENT.CAPTURE.REFUNDED':
+                    order_id = self._extract_order_id(resource)
+                    if not order_id:
+                        logger.error(f"No order_id for REFUNDED event")
+                        return Response({"error": "No order_id in payload"}, status=status.HTTP_400_BAD_REQUEST)
+
+                    tx = PaymentTransaction.objects.filter(
+                        metadata__paypal_order_id=order_id).first()
+                    if not tx:
+                        logger.error(
+                            f"Transaction not found for refunded order_id {order_id}")
+                        return Response({"error": "Transaction not found"}, status=status.HTTP_400_BAD_REQUEST)
+
+                    if tx.status not in [PaymentStatus.PENDING, PaymentStatus.SUCCESS]:
+                        logger.warning(
+                            f"Webhook refund for tx {tx.id} ignored (status: {tx.status})")
+                        return Response({"message": "Invalid status for refund"}, status=status.HTTP_200_OK)
+
+                    # Create Refund record for audit (full amount) – this triggers post_save signal for email
+                    refund, created = Refund.objects.get_or_create(
+                        transaction=tx,
+                        defaults={
+                            'amount': tx.amount,
+                            'reason': 'Auto-refund via PayPal webhook',
+                            'status': 'processed',  # Assume success from webhook
+                            'gateway_response': dict(resource),
+                            'admin_user': None,  # Webhook, no admin
+                        }
+                    )
+                    if not created:
+                        logger.warning(
+                            f"Duplicate Refund record for tx {tx.id}; skipping updates")
+                        return Response({"message": "Duplicate refund ignored"}, status=status.HTTP_200_OK)
+
+                    # Proceed with updates (now safe)
+                    tx.status = PaymentStatus.REFUNDED
+                    tx.gateway_response = dict(resource)
+                    if isinstance(tx.metadata, str):
+                        import json
+                        tx.metadata = json.loads(tx.metadata)
+                    tx.metadata.update({
+                        'gateway': 'paypal',
+                        'refund_id': resource['id']  # Store for reference
+                    })
+                    tx.save(update_fields=[
+                            "status", "gateway_response", "metadata"])
+
+                    # Update booking
+                    if tx.booking:
+                        tx.booking.status = BookingStatus.REFUNDED
+                        tx.booking.save(update_fields=["status"])
+
                     logger.info(
-                        f"Webhook updated transaction {tx.id} to SUCCESS, booking {tx.booking.id} to SCHEDULED with tracking {tx.booking.tracking_number}")
+                        f"Webhook processed refund for tx {tx.id}; set to REFUNDED")
+
+                else:
+                    logger.debug(f"Ignored webhook event: {event_type}")
+                    return Response({"message": "Event ignored"}, status=status.HTTP_200_OK)
+
                 return Response({"message": "Webhook processed"}, status=status.HTTP_200_OK)
+
             except Exception as e:
                 logger.error(
-                    f"Error processing webhook for order_id {order_id}: {str(e)}")
+                    f"Error processing webhook {event_type}: {str(e)}")
                 return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        elif event_type in ['PAYMENT.CAPTURE.DENIED', 'PAYMENT.CAPTURE.REFUNDED']:
-            order_id = resource.get('supplementary_data', {}).get(
-                'related_ids', {}).get('order_id') or resource.get('id')
-            tx = PaymentTransaction.objects.filter(
-                metadata__paypal_order_id=order_id).first()
-            if not tx:
-                tx = PaymentTransaction.objects.filter(
-                    reference=resource.get('custom_id') or order_id).first()
-            if tx and tx.status == PaymentStatus.PENDING:
-                tx.status = PaymentStatus.FAILED
-                tx.gateway_response = dict(resource)
-                tx.save(update_fields=["status", "gateway_response"])
-                logger.info(f"Webhook updated transaction {tx.id} to FAILED")
-            return Response({"message": "Webhook processed"}, status=status.HTTP_200_OK)
-        else:
-            logger.debug(f"Ignored webhook event: {event_type}")
-            return Response({"message": "Event ignored"}, status=status.HTTP_200_OK)
 
 
 class WalletViewSet(viewsets.ReadOnlyModelViewSet):
@@ -468,70 +625,35 @@ class WalletViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         if getattr(self, 'swagger_fake_view', False):
             return Wallet.objects.none()
-        
+
         user = self.request.user
         if not user.is_authenticated:
             return Wallet.objects.none()
-        
+
         return Wallet.objects.filter(user=user)
 
 
 class RefundViewSet(viewsets.ModelViewSet):
+    queryset = Refund.objects.select_related(
+        'transaction__booking', 'admin_user').all()
     serializer_class = RefundSerializer
-    permission_classes = [IsCustomer | IsAdmin]
+    permission_classes = [IsAdmin]
 
     def get_queryset(self):
-        if getattr(self, 'swagger_fake_view', False):
-            return Refund.objects.none()
-        
         user = self.request.user
-        if user.is_authenticated and user.is_staff:
-            return Refund.objects.all()
-        return Refund.objects.filter(transaction__user=user) | Refund.objects.filter(transaction__guest_email=user.email.lower())
+        if user.is_anonymous:
+            return Refund.objects.none()
+        return Refund.objects.filter(
+            transaction__user=user
+        ) | Refund.objects.filter(
+            transaction__guest_email__iexact=user.email
+        )
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context.update({"request": self.request})
+        return context
 
     def perform_create(self, serializer):
-        with transaction.atomic():
-            refund = serializer.save()
-            tx = refund.transaction
-            tx.status = PaymentStatus.REFUNDED
-            gateway = tx.metadata.get('gateway')
-            if gateway == 'paypal':
-                capture_id = tx.metadata.get('capture_id')
-                if not capture_id:
-                    raise ValueError("No capture ID found for refund")
-                access_token = get_access_token()
-                url = f"{settings.PAYPAL_API_URL}/v2/payments/captures/{capture_id}/refund"
-                headers = {
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {access_token}",
-                }
-                body = {
-                    "amount": {"value": str(refund.amount), "currency_code": "USD"}
-                }
-                response = requests.post(url, headers=headers, json=body)
-                try:
-                    response.raise_for_status()
-                    tx.gateway_response['refund_response'] = response.json()
-                except requests.exceptions.RequestException as e:
-                    tx.gateway_response['refund_error'] = response.text if 'response' in locals(
-                    ) else str(e)
-                    raise
-            elif gateway == 'stripe':
-                intent_id = tx.metadata.get('stripe_payment_intent_id')
-                if not intent_id:
-                    raise ValueError(
-                        "No Stripe PaymentIntent ID found for refund")
-                stripe_refund = stripe.Refund.create(
-                    payment_intent=intent_id,
-                    amount=int(refund.amount * 100),  # Convert to cents
-                )
-                tx.gateway_response['refund_response'] = dict(stripe_refund)
-            else:
-                raise ValueError(f"Unsupported gateway for refund: {gateway}")
-            tx.save(update_fields=["status", "gateway_response"])
-            if tx.booking:
-                tx.booking.status = BookingStatus.CANCELLED
-                tx.booking.save(update_fields=["status"])
-            wallet, _ = Wallet.objects.get_or_create(user=tx.user)
-            wallet.balance -= refund.amount
-            wallet.save(update_fields=["balance", "updated_at"])
+        # Saves with admin_user, triggers serializer.create (which calls process_refund)
+        refund = serializer.save(admin_user=self.request.user)
