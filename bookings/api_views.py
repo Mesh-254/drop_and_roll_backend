@@ -335,17 +335,21 @@ class BookingViewSet(viewsets.ModelViewSet):
         checks = {}
         for job_id in job_ids:
             try:
-                booking = Booking.objects.get(id=job_id, driver=request.user.driver_profile)
+                booking = Booking.objects.get(
+                    id=job_id, driver=request.user.driver_profile)
                 immutable = False
                 reason = None
                 if booking.status == BookingStatus.DELIVERED:
-                    pod_exists = ProofOfDelivery.objects.filter(booking=booking).exists()
+                    pod_exists = ProofOfDelivery.objects.filter(
+                        booking=booking).exists()
                     if pod_exists:
                         immutable = True
                         reason = "POD submitted - cannot update"
-                checks[str(job_id)] = {'immutable': immutable, 'reason': reason}
+                checks[str(job_id)] = {
+                    'immutable': immutable, 'reason': reason}
             except Booking.DoesNotExist:
-                checks[str(job_id)] = {'immutable': True, 'reason': 'Not found'}
+                checks[str(job_id)] = {
+                    'immutable': True, 'reason': 'Not found'}
         return Response(checks)
 
     @swagger_auto_schema(
