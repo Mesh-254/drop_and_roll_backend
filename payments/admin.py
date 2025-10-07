@@ -15,4 +15,5 @@ class WalletAdmin(admin.ModelAdmin):
 
 @admin.register(Refund)
 class RefundAdmin(admin.ModelAdmin):
-    list_display = ("transaction", "amount", "reason", "refunded_at")
+    list_display = ("transaction", "amount", "status", "reason", "refunded_at")  # Add 'status'
+    list_filter = ("status", "refunded_at")
