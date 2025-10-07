@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Refund Processed - Drop and Roll</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #f4f4f4; color: #333;">
+    <table role="presentation" style="width: 100%; border-collapse: collapse; background-color: #f4f4f4; padding: 20px;">
+        <tr>
+            <td style="padding: 20px;">
+                <table role="presentation" style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+                    <!-- Header -->
+                    <tr>
+                        <td style="background-color: #3b82f6; padding: 30px; text-align: center; color: white;">
+                            <h1 style="margin: 0; font-size: 24px; font-weight: bold;">Refund Processed</h1>
+                            <p style="margin: 5px 0 0; font-size: 16px; opacity: 0.9;">Drop and Roll Delivery</p>
+                        </td>
+                    </tr>
+                    <!-- Content -->
+                    <tr>
+                        <td style="padding: 30px;">
+                            <h2 style="margin-top: 0; color: #1f2937; font-size: 20px;">Dear Customer,</h2>
+                            <p style="line-height: 1.6; margin-bottom: 20px;">
+                                Your refund of <strong>{{ amount }} {{ currency }}</strong> has been processed for <strong>Booking #{{ booking_id }}</strong>.
+                            </p>
+                            <p style="line-height: 1.6; margin-bottom: 20px; background-color: #fef3c7; padding: 15px; border-left: 4px solid #f59e0b; border-radius: 4px;">
+                                <strong>Reason:</strong> {{ reason }}
+                            </p>
+                            <p style="line-height: 1.6; margin-bottom: 20px;">
+                                If this booking was recently delivered, we apologize for any confusion—delivery confirmation was sent earlier. Your account has been credited, and the funds should appear in 3-5 business days.
+                            </p>
+                            <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 30px 0;">
+                            <p style="line-height: 1.6; margin-bottom: 20px;">
+                                Need help? <a href="mailto:support@dropandroll.com" style="color: #3b82f6; text-decoration: none;">Contact our support team</a>.
+                            </p>
+                            <p style="line-height: 1.6; margin-bottom: 0; font-size: 14px; color: #6b7280;">
+                                Thank you for choosing Drop and Roll!<br>
+                                Your Delivery Team
+                            </p>
+                        </td>
+                    </tr>
+                    <!-- Footer -->
+                    <tr>
+                        <td style="background-color: #f9fafb; padding: 20px; text-align: center; font-size: 12px; color: #6b7280;">
+                            <p style="margin: 0;">Drop and Roll • Fast, Reliable Deliveries</p>
+                            <p style="margin: 5px 0 0;"><a href="https://dropandroll.com" style="color: #3b82f6; text-decoration: none;">www.dropandroll.com</a> | <a href="mailto:support@dropandroll.com" style="color: #3b82f6; text-decoration: none;">support@dropandroll.com</a></p>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>
