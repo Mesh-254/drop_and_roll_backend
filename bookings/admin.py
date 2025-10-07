@@ -5,13 +5,20 @@ from .models import Address, Quote, Booking, ShippingType, ServiceType, Recurrin
 from django import forms
 from django.http import HttpResponseRedirect
 from django.shortcuts import render
-from django.urls import path
+from django.urls import path, reverse
 from django.contrib import messages
 from driver.models import DriverProfile
 from unfold.views import UnfoldModelAdminViewMixin
 from django.views.generic import TemplateView
-import uuid
 from django.core.paginator import Paginator
+from decimal import Decimal
+from django.shortcuts import get_object_or_404
+from bookings.models import BookingStatus
+from payments.models import PaymentStatus
+from payments.api_views import RefundSerializer
+from payments.models import PaymentStatus, Refund
+from django.db import transaction  # For atomic transactions
+from rest_framework import serializers  # Import serializers for ValidationError
 
 
 @admin.register(Address)
@@ -40,12 +47,14 @@ class QuoteAdmin(ModelAdmin):
 
 @admin.register(Booking)
 class BookingAdmin(ModelAdmin):
-    list_display = ("id", "get_customer_name", "get_service_type_name","get_driver_name",
-                    "status_badge", "final_price", "created_at")
+    list_display = ("tracking_number","get_customer_name", "get_service_type_name", "get_driver_name",
+                    "status_badge", "final_price", "created_at", "pod_link", "refund_link")
     list_filter = ("status", "quote__service_type__name", "created_at")
     search_fields = ("id", "customer__email",
                      "customer__full_name", "guest_email")
     readonly_fields = ("created_at", "updated_at")
+
+    ordering = ['-created_at']  # List orders as latest descending
 
     def get_customer_name(self, obj):
         return obj.customer.full_name if obj.customer else obj.guest_email or "Anonymous"
@@ -69,10 +78,164 @@ class BookingAdmin(ModelAdmin):
             "delivered": "#16a34a",
             "cancelled": "#ef4444",
             "failed": "#b91c1c",
+            "refunded": "#10b981",  # FIXED: Added for refunded status
         }.get(obj.status, "#444")
         return format_html('<span style="padding:4px 8px;border-radius:9999px;color:#fff;background:{}">{}</span>',
                            color, obj.get_status_display())
     status_badge.short_description = "Status"
+
+    # Proof of Delivery View Button - Styled with blue theme for "info/view" action
+    def pod_link(self, obj):
+        # FIXED: Direct related_name (post-migration safe)
+        pod = obj.proof_of_delivery.first() if hasattr(
+            obj, 'proof_of_delivery') else None
+        if pod:
+            url = reverse(
+                'admin:tracking_proofofdelivery_change', args=[pod.pk])
+            return format_html(
+                '<a href="{}" style="'
+                'display: inline-block; '
+                'padding: 6px 12px; '
+                'margin: 2px; '
+                'background-color: #3b82f6; '
+                'color: white; '
+                'text-decoration: none; '
+                'border-radius: 4px; '
+                'font-size: 12px; '
+                'font-weight: 500; '
+                'border: 1px solid #3b82f6; '
+                'cursor: pointer; '
+                '">View POD</a>',
+                url
+            )
+        return format_html('<span style="color: #6b7280; font-style: italic;">-</span>')
+    pod_link.short_description = 'POD'
+    pod_link.allow_tags = True
+
+    def refund_link(self, obj):
+        # FIXED: Direct related_name (no fallback to avoid AttributeError)
+        if hasattr(obj, 'payment_transactions'):
+            payment_qs = obj.payment_transactions
+        else:
+            payment_qs = None  # Graceful if not migrated
+        if not payment_qs:
+            return format_html('<span style="color: #6b7280; font-style: italic;">No Payments</span>')
+        if obj.status in [BookingStatus.CANCELLED, BookingStatus.REFUNDED]:
+            return format_html('<span style="background-color: #10b981; color: white; padding: 4px 8px; border-radius: 4px;">Refunded</span>')
+        has_refund = payment_qs.filter(refunds__status='processed').exists()
+        if has_refund:
+            return format_html('<span style="background-color: #10b981; color: white; padding: 4px 8px; border-radius: 4px;">Refunded</span>')
+        url = reverse('admin:bookings_booking_refund', args=[obj.pk])
+        return format_html(
+            '<a href="{}" style="background-color: #f59e0b; color: white; padding: 6px 12px; text-decoration: none; border-radius: 4px; font-weight: 500;">Offer Refund</a>',
+            url
+        )
+    refund_link.short_description = 'Refund'
+    refund_link.allow_tags = True
+
+    @transaction.atomic
+    def refund_booking_view(self, request, pk):
+        booking = get_object_or_404(Booking, pk=pk)
+        if booking.status in [BookingStatus.CANCELLED, BookingStatus.REFUNDED]:
+            self.message_user(
+                request, 'Cannot refund finalized booking.', level='error')
+            return HttpResponseRedirect('..')
+
+        # FIXED: Direct related_name with hasattr check
+        if hasattr(booking, 'payment_transactions'):
+            payment_qs = booking.payment_transactions
+        else:
+            payment_qs = None
+        if not payment_qs:
+            self.message_user(
+                request, 'No payment relation found (check migration).', level='error')
+            return HttpResponseRedirect('..')
+        tx = payment_qs.filter(status=PaymentStatus.SUCCESS).order_by(
+            '-created_at').first()
+        if not tx:
+            self.message_user(
+                request, 'No successful payment found.', level='error')
+            return HttpResponseRedirect('..')
+
+        # FIXED: Safe check for existing refund (OneToOne reverse accessor)
+        has_refund = False
+        try:
+            refund = tx.refunds
+            if refund.status == 'processed':
+                has_refund = True
+        except Refund.DoesNotExist:
+            pass
+        if has_refund:
+            self.message_user(request, 'Already refunded.', level='warning')
+            return HttpResponseRedirect('..')
+
+        warning = ""
+        if booking.status != BookingStatus.DELIVERED:
+            warning = "Warning: This is not delivered—refunding will cancel the booking and notify driver/customer."
+
+        if request.method == 'POST':
+            amount_str = request.POST.get('amount')
+            reason = request.POST.get('reason', '').strip()[:255]
+            try:
+                amount = Decimal(amount_str)
+                if amount <= 0 or amount != tx.amount:  # NEW: Enforce full
+                    raise ValueError('Must be full refund amount.')
+            except ValueError:
+                self.message_user(
+                    request, 'Invalid amount—must match original.', level='error')
+                amount = None
+
+            if amount and reason:
+                # Duplicate check (redundant with serializer, but early UX)
+                if Refund.objects.filter(transaction=tx).exists():
+                    self.message_user(
+                        request, 'A refund already exists for this transaction.', level='error')
+                    return HttpResponseRedirect('..')
+
+                data = {'transaction': tx.id, 'amount': amount, 'reason': reason}
+                serializer = RefundSerializer(data=data, context={'request': request})
+                if serializer.is_valid():
+                    try:
+                        refund = serializer.save()  # Triggers full process
+                        currency = getattr(tx, 'currency', 'GBP')
+                        self.message_user(
+                            request, f'Full refund {amount} {currency} processed for booking {booking.id}. Customer notified.', level='success')
+                        return HttpResponseRedirect('..')
+                    except serializers.ValidationError as e:
+                        self.message_user(request, f'Error: {str(e)}', level='error')
+                else:
+                    self.message_user(
+                        request, f'Validation error: {list(serializer.errors.values())[0] if serializer.errors else "Unknown"}', level='error')
+
+        currency = getattr(tx, 'currency', 'GBP')
+        context = {
+            'title': f'Process Refund for Booking {booking.id} ({currency})',
+            'booking': booking,
+            'transaction': tx,
+            'default_amount': tx.amount,  # Full tx amount pre-filled
+            'warning': warning,
+            'opts': self.model._meta,
+            'original_url': reverse('admin:bookings_booking_changelist'),
+        }
+        return render(request, 'admin/booking_refund_form.html', context)
+
+    def get_urls(self):
+        # FIXED: Single merged get_urls with correct namespaced names
+        urls = super().get_urls()
+        refund_view = self.admin_site.admin_view(self.refund_booking_view)
+        custom_view = self.admin_site.admin_view(
+            BulkAssignDriversView.as_view(model_admin=self)
+        )
+
+        custom_urls = [
+            # FIXED: Full namespace for reverse
+            path('<uuid:pk>/refund/', refund_view,
+                 name='bookings_booking_refund'),
+            path("bulk-assign-drivers/", custom_view,
+                 name="booking_booking_bulk_assign_drivers"),
+
+        ]
+        return custom_urls + urls
 
     # Custom bulk action for assigning driver
     actions = ["assign_driver"]
@@ -80,7 +243,8 @@ class BookingAdmin(ModelAdmin):
     def assign_driver(self, request, queryset):
         class AssignDriverForm(forms.Form):
             driver = forms.ModelChoiceField(
-                queryset=DriverProfile.objects.filter(status="active").order_by("user__full_name"),
+                queryset=DriverProfile.objects.filter(
+                    status="active").order_by("user__full_name"),
                 label="Select Driver",
                 required=True
             )
@@ -92,7 +256,8 @@ class BookingAdmin(ModelAdmin):
                 # Only update bookings in 'scheduled' status and change to 'assigned'
                 valid_statuses = ["scheduled"]
                 valid_queryset = queryset.filter(status__in=valid_statuses)
-                updated_count = valid_queryset.update(driver=driver, status="assigned")
+                updated_count = valid_queryset.update(
+                    driver=driver, status="assigned")
                 if updated_count > 0:
                     self.message_user(
                         request,
@@ -107,7 +272,8 @@ class BookingAdmin(ModelAdmin):
                     )
                 return HttpResponseRedirect(".")
             else:
-                self.message_user(request, "Invalid driver selection.", level="error")
+                self.message_user(
+                    request, "Invalid driver selection.", level="error")
         else:
             form = AssignDriverForm()
 
@@ -121,16 +287,6 @@ class BookingAdmin(ModelAdmin):
 
     assign_driver.short_description = "Assign driver to selected bookings (Scheduled only)"
 
-    def get_urls(self):
-        urls = super().get_urls()
-        custom_view = self.admin_site.admin_view(
-            BulkAssignDriversView.as_view(model_admin=self)
-        )
-        custom_urls = [
-            path("bulk-assign-drivers/", custom_view, name="booking_booking_bulk_assign_drivers"),
-        ]
-        return custom_urls + urls
-
 
 class BulkAssignDriversView(UnfoldModelAdminViewMixin, TemplateView):
     title = "Bulk Assign Drivers"
@@ -139,28 +295,33 @@ class BulkAssignDriversView(UnfoldModelAdminViewMixin, TemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        bookings = Booking.objects.filter(status="scheduled").order_by("-created_at")
+        bookings = Booking.objects.filter(
+            status="scheduled").order_by("-created_at")
         paginator = Paginator(bookings, 15)  # 25 bookings per page
         page_number = self.request.GET.get("page")
         page_obj = paginator.get_page(page_number)
-        context["drivers"] = DriverProfile.objects.filter(status="active").order_by("user__full_name")
+        context["drivers"] = DriverProfile.objects.filter(
+            status="active").order_by("user__full_name")
         context["bookings"] = page_obj  # Pass page_obj as bookings
         context["opts"] = Booking._meta
         return context
 
     def post(self, request, *args, **kwargs):
         driver_id = request.POST.get("driver")
-        booking_ids = request.POST.getlist("booking_ids")  # Get list of selected booking IDs
+        # Get list of selected booking IDs
+        booking_ids = request.POST.getlist("booking_ids")
         try:
             driver = DriverProfile.objects.get(id=driver_id, status="active")
-            bookings = Booking.objects.filter(id__in=booking_ids, status="scheduled")
+            bookings = Booking.objects.filter(
+                id__in=booking_ids, status="scheduled")
             updated_count = bookings.update(driver=driver, status="assigned")
             messages.success(
                 request,
                 f"Assigned {driver.user.full_name} to {updated_count} booking{'s' if updated_count > 1 else ''} and updated status to 'Assigned'."
             )
         except DriverProfile.DoesNotExist:
-            messages.error(request, "Selected driver does not exist or is not active.")
+            messages.error(
+                request, "Selected driver does not exist or is not active.")
         except Exception as e:
             messages.error(request, f"Error: {str(e)}")
         return HttpResponseRedirect(".")
