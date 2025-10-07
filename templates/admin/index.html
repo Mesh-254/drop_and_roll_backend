@@ -87,7 +87,7 @@
                         attach_money
                     {% endcomponent %}
                     {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
-                        KES {{ total_revenue|floatformat:2 }}
+                        GBP {{ total_revenue|floatformat:2 }}
                     {% endcomponent %}
                     {% component "unfold/components/text.html" with class="text-gray-500 text-sm" %}
                         From {{ total_bookings }} bookings
@@ -125,7 +125,7 @@
                         bar_chart
                     {% endcomponent %}
                     {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
-                        KES {{ average_booking_value|floatformat:2 }}
+                        GBP {{ average_booking_value|floatformat:2 }}
                     {% endcomponent %}
                     {% component "unfold/components/text.html" with class="text-gray-500 text-sm" %}
                         Average value per booking
@@ -137,7 +137,7 @@
                         payments
                     {% endcomponent %}
                     {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
-                        KES {{ total_payouts|floatformat:2 }}
+                        GBP {{ total_payouts|floatformat:2 }}
                     {% endcomponent %}
                     {% component "unfold/components/text.html" with class="text-gray-500 text-sm" %}
                         Payouts to drivers
@@ -149,7 +149,7 @@
                         money_off
                     {% endcomponent %}
                     {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
-                        KES {{ total_refunds|floatformat:2 }}
+                        GBP {{ total_refunds|floatformat:2 }}
                     {% endcomponent %}
                     {% component "unfold/components/text.html" with class="text-gray-500 text-sm" %}
                         Refunds processed
@@ -185,7 +185,7 @@
                         account_balance_wallet
                     {% endcomponent %}
                     {% component "unfold/components/title.html" with class="text-3xl font-bold text-primary-600" %}
-                        KES {{ total_wallet_balance|floatformat:2 }}
+                        GBP {{ total_wallet_balance|floatformat:2 }}
                     {% endcomponent %}
                     {% component "unfold/components/text.html" with class="text-gray-500 text-sm" %}
                         Across all users

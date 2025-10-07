@@ -176,7 +176,7 @@ def dashboard_callback(request, context):
             'customer': booking['customer__full_name'] or 'Guest',
             'service_type': booking['quote__service_type__name'] or 'Unknown',
             'status': booking['status'],
-            'final_price': f"KES {booking['final_price']}",
+            'final_price': f"GBP {booking['final_price']}",
             'created_at': booking['created_at'].strftime('%Y-%m-%d %H:%M')
         }
         for booking in recent_bookings
