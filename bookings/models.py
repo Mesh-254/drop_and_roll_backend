@@ -21,6 +21,7 @@ class BookingStatus(models.TextChoices):
     DELIVERED = "delivered", "Delivered"
     CANCELLED = "cancelled", "Cancelled"
     FAILED = "failed", "Failed"
+    REFUNDED = "refunded", "Refunded"  # NEW: Post-delivery refunds/returns
 
 
 class Address(models.Model):
