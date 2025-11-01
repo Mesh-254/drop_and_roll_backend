@@ -162,9 +162,12 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 AUTH_USER_MODEL = "users.User"
 
 # Allow specific origins (e.g., your frontend)
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-]
+# 🔒 SECURITY CONFIG
+CORS_ALLOWED_ORIGINS = env("CORS_ALLOWED_ORIGINS",
+                           default="https://dropnroll.co.uk").split(',')
+SESSION_COOKIE_SECURE = env.bool("SESSION_COOKIE_SECURE", default=True)
+CSRF_COOKIE_SECURE = env.bool("CSRF_COOKIE_SECURE", default=True)
+SECURE_PROXY_SSL_HEADER = env("SECURE_PROXY_SSL_HEADER").split(',')
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
@@ -211,7 +214,8 @@ CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = env("CELERY_TIMEZONE", default="UTC")
 
 # Email backend
-EMAIL_BACKEND = env("EMAIL_BACKEND", default="django.core.mail.backends.smtp.EmailBackend")
+EMAIL_BACKEND = env(
+    "EMAIL_BACKEND", default="django.core.mail.backends.smtp.EmailBackend")
 # EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"  # For testing"
 EMAIL_HOST = env("EMAIL_HOST", default="smtp.gmail.com")
 EMAIL_PORT = env("EMAIL_PORT", default=587)
@@ -423,9 +427,11 @@ UNFOLD = {
                     },
                     {
                         "title": "Bulk Driver Assignment",
-                        "icon": "assignment",  # Material Icon (adjust as needed)
+                        # Material Icon (adjust as needed)
+                        "icon": "assignment",
                         "link": reverse_lazy("admin:booking_booking_bulk_assign_drivers"),
-                        "permissions": ["booking.change_booking"],  # Restrict access
+                        # Restrict access
+                        "permissions": ["booking.change_booking"],
                     },
                 ],
             },
