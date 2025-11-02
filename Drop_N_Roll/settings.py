@@ -163,6 +163,7 @@ AUTH_USER_MODEL = "users.User"
 
 # Allow specific origins (e.g., your frontend)
 # 🔒 SECURITY CONFIG
+CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOWED_ORIGINS = env("CORS_ALLOWED_ORIGINS",
                            default="https://dropnroll.co.uk").split(',')
 SESSION_COOKIE_SECURE = env.bool("SESSION_COOKIE_SECURE", default=True)
@@ -263,7 +264,7 @@ UNFOLD = {
         {
             "icon": "diamond",
             "title": _("Drop N Roll"),
-            "link": "https://example.com",
+            "link": "https://dropnroll.co.uk/",
         },
         # ...
     ],
