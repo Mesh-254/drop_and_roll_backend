@@ -1,7 +1,7 @@
 from django.conf import settings
-from django.contrib.auth import get_user_model
+from django.contrib.auth import get_user_model, login
 from django.contrib.auth.tokens import default_token_generator
-from django.core.mail import send_mail
+from django.shortcuts import redirect
 from django.utils.encoding import force_bytes
 from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
@@ -10,12 +10,13 @@ from google.oauth2 import id_token
 from rest_framework import serializers
 from rest_framework import status
 from rest_framework import viewsets
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
+from django.http import HttpResponseRedirect
 from django.db import transaction
 
 # Assuming this is the correct import
@@ -35,6 +36,22 @@ User = get_user_model()
 
 
 logger = logging.getLogger(__name__)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def login_to_admin(request):
+    # Use ModelBackend (the default session backend)
+    login(request, request.user, backend='django.contrib.auth.backends.ModelBackend')
+
+    # Force session save
+    request.session.save()
+
+    # Redirect to admin
+    response = redirect('/admin/')
+    response['Access-Control-Allow-Origin'] = 'http://localhost:5173'
+    response['Access-Control-Allow-Credentials'] = 'true'
+    return response
 
 
 class GoogleLoginView(APIView):
