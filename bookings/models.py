@@ -198,7 +198,7 @@ class Booking(models.Model):
     payment_expires_at = models.DateTimeField(blank=True, null=True)
     payment_attempts = models.PositiveIntegerField(default=0)
     tracking_number = models.CharField(
-        max_length=20, unique=True, blank=True, null=True)
+        max_length=20, unique=True, blank=True, null=True, db_index=True)
 
     class Meta:
         indexes = [
@@ -206,6 +206,8 @@ class Booking(models.Model):
             models.Index(fields=["created_at"]),
             models.Index(fields=["customer"]),
             models.Index(fields=['receiver_email']),
+            models.Index(fields=["tracking_number"]),
+
         ]
 
     constraints = [
@@ -292,4 +294,3 @@ class BulkUpload(models.Model):
 # ADD Proof of delivery
 class ProofOfDelivery(models.Model):
     pass
-
