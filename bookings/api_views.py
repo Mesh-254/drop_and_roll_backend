@@ -4,7 +4,8 @@ from drf_yasg import openapi  # type: ignore
 from drf_yasg.utils import swagger_auto_schema  # type: ignore
 from .tasks import send_booking_confirmation_email
 from rest_framework import viewsets, status  # type: ignore
-from rest_framework.decorators import action  # type: ignore
+from rest_framework.decorators import action, api_view, permission_classes  # type: ignore
+from django.shortcuts import get_object_or_404  # type: ignore
 from rest_framework.permissions import IsAuthenticated, IsAuthenticatedOrReadOnly  # type: ignore
 from rest_framework.response import Response  # type: ignore
 from rest_framework.permissions import AllowAny  # type: ignore
@@ -32,6 +33,12 @@ from .serializers import (
     RecurringScheduleSerializer, ShippingTypeSerializer, ServiceTypeSerializer,
 )
 from .utils.pricing import compute_quote
+from .utils.utils import (
+    format_datetime,
+    format_address,
+    get_current_location,
+    build_tracking_timeline,
+)
 
 from django.db.models import Case, When, IntegerField  # type: ignore
 
@@ -482,3 +489,86 @@ class ServiceTypeViewSet(viewsets.ModelViewSet):
         if self.action in ["create", "update", "partial_update", "destroy"]:
             return [IsAdminOrReadOnly()]
         return super().get_permissions()
+
+
+# FUNCTION TO TRACK PARCELS
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def track_parcel(request):
+    """
+    Public tracking endpoint – no auth, no guest email.
+    Query: ?tracking_number=BK-ABC123
+    """
+    tracking_number = request.query_params.get("tracking_number", "").strip().upper()
+
+    if not tracking_number:
+        return Response(
+            {"error": "tracking_number is required"},
+            status=400,
+        )
+
+    # --------------------------------------------------------------
+    # 1. Efficient query – ONLY the fields we need
+    # --------------------------------------------------------------
+    try:
+        booking = (
+            Booking.objects.select_related(
+                "pickup_address",           # Full address object
+                "dropoff_address",          # Full address object
+                "quote",                    # We need a few scalar fields from Quote
+            )
+            .only(
+                # Booking
+                "id",
+                "tracking_number",
+                "status",
+                "scheduled_pickup_at",
+                "scheduled_dropoff_at",
+                "created_at",
+                "updated_at",
+                "final_price",
+                # Address (city/region only – enough for UI)
+                "pickup_address__city",
+                "pickup_address__region",
+                "dropoff_address__city",
+                "dropoff_address__region",
+                # Quote scalars
+                "quote__weight_kg",
+                "quote__fragile",
+            )
+            .get(tracking_number=tracking_number)
+        )
+    except Booking.DoesNotExist:
+        return Response(
+            {"error": "Tracking number not found"},
+            status=404,
+        )
+
+    # --------------------------------------------------------------
+    # 2. Build response payload (pure Python – no extra DB hits)
+    # --------------------------------------------------------------
+    timeline = build_tracking_timeline(booking)
+
+    payload = {
+        "tracking_number": booking.tracking_number,
+        "status": booking.status,
+        "current_location": get_current_location(booking),
+        "estimated_delivery": format_datetime(booking.scheduled_dropoff_at),
+        "origin": format_address(booking.pickup_address),
+        "destination": format_address(booking.dropoff_address),
+        "weight_kg": float(booking.quote.weight_kg) if booking.quote else None,
+        "fragile": booking.quote.fragile if booking.quote else False,
+        "final_price": float(booking.final_price),
+        "timeline": timeline,
+        "last_updated": format_datetime(booking.updated_at),
+    }
+
+    # --------------------------------------------------------------
+    # 3. Optional: cache frequent lookups (Redis / in-memory)
+    # --------------------------------------------------------------
+    # from django.core.cache import cache
+    # cache.set(f"track:{tracking_number}", payload, timeout=60)
+
+    return Response(payload, status=200)
