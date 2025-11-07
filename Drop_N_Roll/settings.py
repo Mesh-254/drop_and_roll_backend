@@ -59,6 +59,7 @@ INSTALLED_APPS = [
     'driver.apps.DriverConfig',
     'payments.apps.PaymentsConfig',
     'business.apps.BusinessConfig',
+    'support.apps.SupportConfig',
 
     'celery',
     'corsheaders',

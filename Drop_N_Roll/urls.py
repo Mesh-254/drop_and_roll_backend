@@ -46,6 +46,8 @@ urlpatterns = [
     path("api/payments/", include("payments.urls")),
     path('api/business/', include('business.urls')),
 
+    path("api/support/", include("support.urls")),
+
     path("api/auth/jwt/create/", TokenObtainPairView.as_view(), name="jwt-create"),
     path("api/auth/jwt/refresh/", TokenRefreshView.as_view(), name="jwt-refresh"),
 
