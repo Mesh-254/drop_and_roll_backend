@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from drf_yasg import openapi  # type: ignore
 from drf_yasg.utils import swagger_auto_schema  # type: ignore
-from .tasks import send_booking_confirmation_email
+from .tasks import optimize_bookings, send_booking_confirmation_email
 from rest_framework import viewsets, status  # type: ignore
 from rest_framework.decorators import action, api_view, permission_classes  # type: ignore
 from django.shortcuts import get_object_or_404  # type: ignore
@@ -23,7 +23,7 @@ from django.utils import timezone  # type: ignore
 from payments.models import PaymentTransaction, PaymentStatus
 from payments.serializers import PaymentTransactionSerializer
 
-from .models import Quote, Booking, RecurringSchedule, BookingStatus, ShippingType, ServiceType
+from .models import Quote, Booking, RecurringSchedule, BookingStatus, ShippingType, ServiceType, Route
 from .permissions import IsCustomer, IsAdminOrReadOnly, IsDriverOrAdmin
 from .serializers import (
     QuoteRequestSerializer,
@@ -31,6 +31,7 @@ from .serializers import (
     BookingCreateSerializer,
     BookingSerializer,
     RecurringScheduleSerializer, ShippingTypeSerializer, ServiceTypeSerializer,
+    RouteSerializer,
 )
 from .utils.pricing import compute_quote
 from .utils.utils import (
@@ -501,7 +502,8 @@ def track_parcel(request):
     Public tracking endpoint – no auth, no guest email.
     Query: ?tracking_number=BK-ABC123
     """
-    tracking_number = request.query_params.get("tracking_number", "").strip().upper()
+    tracking_number = request.query_params.get(
+        "tracking_number", "").strip().upper()
 
     if not tracking_number:
         return Response(
@@ -572,3 +574,14 @@ def track_parcel(request):
     # cache.set(f"track:{tracking_number}", payload, timeout=60)
 
     return Response(payload, status=200)
+
+
+class RouteViewSet(viewsets.ModelViewSet):
+    queryset = Route.objects.all()
+    serializer_class = RouteSerializer
+    permission_classes = [IsAdminOrReadOnly]
+
+    @action(detail=False, methods=['post'], permission_classes=[IsAdminOrReadOnly])
+    def optimize_now(self, request):
+        optimize_bookings.delay()  # Trigger manually
+        return Response({'status': 'Optimization queued'})
