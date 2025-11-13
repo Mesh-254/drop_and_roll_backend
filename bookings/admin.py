@@ -17,6 +17,7 @@ from bookings.models import BookingStatus
 from payments.models import PaymentStatus
 from payments.api_views import RefundSerializer
 from payments.models import PaymentStatus, Refund
+from .models import Route, Hub
 from django.db import transaction  # For atomic transactions
 from rest_framework import serializers  # Import serializers for ValidationError
 
@@ -354,3 +355,117 @@ class BulkUploadAdmin(ModelAdmin):
     list_display = ("id", "customer", "created_at", "processed")
     list_filter = ("processed", "created_at")
     search_fields = ("customer__email", "customer__full_name")
+
+
+
+#********************************************************************************
+# ADMIN SECTION FOR ROUTE AND HUB MODELS NEW FOR DRIVER ASSIGNMENT AND OPTIMIZATION
+#*******************************************************************************
+
+
+class BookingInline(admin.TabularInline):  # Show bookings in Route admin
+    model = Route.bookings.through  # For M2M
+    extra = 0
+    fields = ('booking',)
+    raw_id_fields = ('booking',)  # Efficient for large lists
+    readonly_fields = ('booking',)
+    verbose_name = "Booking in Route"
+    verbose_name_plural = "Bookings in Route"
+    can_delete = False
+
+@admin.register(Route)
+class RouteAdmin(ModelAdmin):
+    list_display = ('id', 'driver_link', 'leg_type', 'status', 'total_time_hours', 'total_distance_km', 'booking_count')
+    list_filter = ('leg_type', 'status', 'driver')
+    search_fields = ('driver__user__full_name',)
+    inlines = [BookingInline]  # View bookings per route
+    actions = ['assign_driver_manually', 're_optimize']
+
+    def get_queryset(self, request):
+        # Efficient: Prefetch bookings/driver
+        return super().get_queryset(request).prefetch_related('bookings', 'driver')
+    
+    def assign_driver(self, request, queryset):
+        if 'apply' in request.POST:
+            driver_id = request.POST.get('driver')
+            driver = get_object_or_404(DriverProfile, id=driver_id)
+            with transaction.atomic():
+                for route in queryset:
+                    if route.driver:
+                        continue  # Skip if already assigned
+                    route.driver = driver
+                    route.status = 'assigned'
+                    route.save()
+                    route.bookings.update(driver=driver, status='assigned')
+                self.message_user(request, "Drivers assigned successfully.", level=messages.SUCCESS)
+            return HttpResponseRedirect(".")
+
+    def driver_link(self, obj):
+        if obj.driver:
+            return format_html('<a href="{}">{}</a>', reverse('admin:driver_driverprofile_change', args=(obj.driver.id,)), obj.driver.user.full_name)
+        return "-"
+    driver_link.short_description = "Driver"
+
+    def booking_count(self, obj):
+        return obj.bookings.count()
+    booking_count.short_description = "Bookings"
+
+    def assign_driver_manually(self, request, queryset):
+        # Manual assign action
+        if 'apply' in request.POST:
+            driver_id = request.POST.get('driver')
+            try:
+                driver = DriverProfile.objects.get(id=driver_id, status='active')
+                for route in queryset.filter(status='pending'):
+                    route.driver = driver
+                    route.status = 'assigned'
+                    route.save()
+                    route.bookings.update(driver=driver, status='assigned')
+                self.message_user(request, "Drivers assigned successfully.", level=messages.SUCCESS)
+            except Exception as e:
+                self.message_user(request, f"Error: {e}", level=messages.ERROR)
+            return HttpResponseRedirect(".")
+        
+        # Form for selecting driver
+        context = {
+            'title': "Assign Driver to Selected Routes",
+            'queryset': queryset,
+            'opts': self.model._meta,
+            'action_checkbox_name': admin.helpers.ACTION_CHECKBOX_NAME,
+            'drivers': DriverProfile.objects.filter(status='active'),
+        }
+        return render(request, 'templates/admin/assign_driver.html', context)  # Create this template
+
+    def re_optimize(self, request, queryset):
+        # Re-run optimization on selected
+        from .tasks import optimize_bookings
+        optimize_bookings.delay()
+        self.message_user(request, "Re-optimization queued.")
+
+@admin.register(Hub)
+class HubAdmin(ModelAdmin):
+    list_display = ('name', 'address_display', 'booking_count')
+    search_fields = ('name', 'address__city')
+
+    def address_display(self, obj):
+        return str(obj.address)
+    address_display.short_description = "Address"
+
+    def booking_count(self, obj):
+        # Example: Count related bookings (customize as needed)
+        return Booking.objects.filter(pickup_address=obj.address).count() + Booking.objects.filter(dropoff_address=obj.address).count()
+    booking_count.short_description = "Related Bookings"
+
+# In BookingAdmin: Add route link
+class BookingAdmin(ModelAdmin):  # Your existing
+    # ... existing fields
+    list_display = ("tracking_number", ..., "route_link")  # Add
+
+    def route_link(self, obj):
+        routes = obj.route_set.all()  # Reverse M2M
+        if routes:
+            links = [format_html('<a href="{}">Route {}</a>', reverse('admin:bookings_route_change', args=(r.id,)), r.id) for r in routes]
+            return format_html(", ".join(links))
+        return "-"
+    route_link.short_description = "Route"
+    route_link.allow_tags = True
