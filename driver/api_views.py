@@ -19,7 +19,7 @@ from django.db import transaction
 from rest_framework.parsers import MultiPartParser, FormParser
 from django.db.models import Case, When, IntegerField
 
-from bookings.models import Booking, BookingStatus
+from bookings.models import Booking, BookingStatus, Route
 from bookings.serializers import BookingSerializer
 from driver.models import (
     DriverAvailability, DriverPayout, DriverRating, DriverDocument,
@@ -326,6 +326,11 @@ class DriverAssignedBookingViewSet(mixins.ListModelMixin, viewsets.GenericViewSe
     def list(self, request, *args, **kwargs):
         # Rely on DRF's authentication and permission classes
         return super().list(request, *args, **kwargs)
+    
+    @action(detail=False, methods=['get'], url_path='my-route')
+    def my_route(self, request):
+        route = Route.objects.filter(driver=request.user.driver_profile, status='assigned').first()
+        return Response({'ordered_stops': route.ordered_stops})  # Next stop is [0]
 
 # class DriverAssignedBookingViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
 #     serializer_class = BookingSerializer
