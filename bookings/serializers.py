@@ -1,9 +1,8 @@
 import uuid
 from rest_framework import serializers
-from .models import Address, Quote, Booking, RecurringSchedule, BulkUpload, ServiceType, BookingStatus
+from .models import Address, Quote, Booking, RecurringSchedule, BulkUpload, Route, ServiceType, BookingStatus
 from .utils.pricing import compute_quote
 from decimal import Decimal
-
 from rest_framework import serializers
 
 from bookings.models import Address, Quote, Booking, RecurringSchedule, BulkUpload, ServiceType, ShippingType, \
@@ -30,7 +29,15 @@ class AddressSerializer(serializers.ModelSerializer):
         model = Address
         fields = ["id", "line1", "line2", "city", "region", "postal_code", "country", "latitude", "longitude",
                   "validated"]
-        read_only_fields = ["id", "validated"]
+        read_only_fields = ["id"]
+
+    def create(self, validated_data):
+        # Auto-validate if lat/lng present
+        lat = validated_data.get('latitude')
+        lng = validated_data.get('longitude')
+        if lat is not None and lng is not None:
+            validated_data['validated'] = True
+        return super().create(validated_data)
 
 
 class QuoteRequestSerializer(serializers.Serializer):
@@ -109,6 +116,7 @@ class QuoteSerializer(serializers.ModelSerializer):
             "service_type",
             "service_type_id",
             "meta",
+            "volume_m3",
         ]
         read_only_fields = ["id", "created_at", "final_price", "base_price"]
 
@@ -292,3 +300,9 @@ class BulkUploadSerializer(serializers.ModelSerializer):
                   "processed", "processed_at", "result"]
         read_only_fields = ["id", "customer", "created_at",
                             "processed", "processed_at", "result"]
+
+
+class RouteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Route
+        fields = '__all__'
