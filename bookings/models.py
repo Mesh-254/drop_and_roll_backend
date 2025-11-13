@@ -12,11 +12,21 @@ import uuid
 from driver.models import DriverProfile
 
 
+class Hub(models.Model):
+    name = models.CharField(max_length=100)
+    address = models.OneToOneField(
+        'Address', on_delete=models.PROTECT, related_name='hub')
+
+    def __str__(self):
+        return self.name
+
+
 class BookingStatus(models.TextChoices):
     PENDING = "pending", "Pending"
     SCHEDULED = "scheduled", "Scheduled"
     ASSIGNED = "assigned", "Assigned"
     PICKED_UP = "picked_up", "Picked Up"
+    AT_HUB = "at_hub", "At Hub"
     IN_TRANSIT = "in_transit", "In Transit"
     DELIVERED = "delivered", "Delivered"
     CANCELLED = "cancelled", "Cancelled"
@@ -120,14 +130,29 @@ class Quote(models.Model):
     # pricing breakdown/inputs
     meta = models.JSONField(default=dict, blank=True)
 
+    # NEW: Computed volume in m³ from dimensions (assuming cm units)
+    volume_m3 = models.FloatField(default=0.0)
+
     class Meta:
         indexes = [
             models.Index(fields=["created_at"]),
         ]
 
+    def save(self, *args, **kwargs):
+        # NEW: Compute volume if dimensions provided (l/w/h in cm, convert to m³)
+        if self.dimensions:
+            l = self.dimensions.get('l', 0)
+            w = self.dimensions.get('w', 0)
+            h = self.dimensions.get('h', 0)
+            self.volume_m3 = (l * w * h) / 1_000_000.0  # cm³ to m³
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return f"{self.service_type.name if self.service_type else 'Unknown'} KES {self.final_price} ({self.distance_km}km, {self.weight_kg}kg)"
 
+# NEW: Helper function to get volume (used in tasks)
+def get_volume(booking):
+    return booking.quote.volume_m3 if booking.quote else 0.0
 
 class Booking(models.Model):
     """Single parcel delivery booking."""
@@ -144,6 +169,14 @@ class Booking(models.Model):
 
     driver = models.ForeignKey(DriverProfile, on_delete=models.SET_NULL, null=True, blank=True,
                                related_name="bookings")
+    hub = models.ForeignKey(
+        'Hub',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='bookings_at_hub',
+        help_text="Hub where the booking is currently located (set when status='at_hub')."
+    )
 
     pickup_address = models.ForeignKey(
         Address, on_delete=models.PROTECT, related_name="pickup_bookings", blank=True, null=True)
@@ -289,6 +322,20 @@ class BulkUpload(models.Model):
 
     def __str__(self):
         return f"BulkUpload {self.id} by {self.customer_id}"
+
+
+class Route(models.Model):
+    driver = models.ForeignKey(
+        DriverProfile, on_delete=models.SET_NULL, null=True)
+    bookings = models.ManyToManyField(Booking)  # Grouped bookings
+    leg_type = models.CharField(
+        choices=[('pickup', 'Pickup'), ('delivery', 'Delivery')])
+    # [{'booking_id': str(uuid), 'address': {'lat': float, 'lng': float}, 'eta': datetime}]
+    ordered_stops = models.JSONField(default=list)
+    total_time_hours = models.FloatField(default=0.0)
+    total_distance_km = models.FloatField(default=0.0)
+    status = models.CharField(choices=[('pending', 'Pending'), (
+        'assigned', 'Assigned'), ('completed', 'Completed')], default='pending')
 
 
 # ADD Proof of delivery
