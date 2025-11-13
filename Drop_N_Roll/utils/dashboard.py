@@ -3,11 +3,13 @@ from datetime import timedelta
 from django.db.models import Sum, Count, Avg
 from django.utils import timezone
 from django.contrib.auth import get_user_model
-from bookings.models import Booking, Quote, ServiceType, ShippingType, RecurringSchedule, BulkUpload, Address
+from bookings.models import Booking, Quote, ServiceType, ShippingType, RecurringSchedule, BulkUpload, Address, Route, Hub
 from driver.models import DriverProfile, DriverPayout, DriverRating, DriverInvitation
 from payments.models import PaymentTransaction, Refund, Wallet
+from support.models import Ticket, TicketStatus
 
 User = get_user_model()
+
 
 def dashboard_callback(request, context):
     # Restrict sensitive data to superusers
@@ -19,45 +21,127 @@ def dashboard_callback(request, context):
 
     # KPI Queries
     total_users = User.objects.count()
-    users_by_role = User.objects.values('role').annotate(count=Count('id')).order_by('role')
-    total_customers = next((item['count'] for item in users_by_role if item['role'] == 'customer'), 0)
-    total_drivers = next((item['count'] for item in users_by_role if item['role'] == 'driver'), 0)
-    total_admins = next((item['count'] for item in users_by_role if item['role'] == 'admin'), 0)
+    users_by_role = User.objects.values('role').annotate(
+        count=Count('id')).order_by('role')
+    total_customers = next(
+        (item['count'] for item in users_by_role if item['role'] == 'customer'), 0)
+    total_drivers = next(
+        (item['count'] for item in users_by_role if item['role'] == 'driver'), 0)
+    total_admins = next(
+        (item['count'] for item in users_by_role if item['role'] == 'admin'), 0)
 
     total_bookings = Booking.objects.count()
-    bookings_by_status = Booking.objects.values('status').annotate(count=Count('id')).order_by('status')
-    booking_status_counts = {item['status']: item['count'] for item in bookings_by_status}
+    bookings_by_status = Booking.objects.values(
+        'status').annotate(count=Count('id')).order_by('status')
+    booking_status_counts = {item['status']: item['count']
+                             for item in bookings_by_status}
 
     total_quotes = Quote.objects.count()
     total_service_types = ServiceType.objects.count()
     total_shipping_types = ShippingType.objects.count()
-    total_revenue = Booking.objects.aggregate(total=Sum('final_price'))['total'] or 0
-    average_booking_value = Booking.objects.aggregate(avg=Avg('final_price'))['avg'] or 0
-    total_recurring_schedules = RecurringSchedule.objects.filter(active=True).count()
+    total_revenue = Booking.objects.aggregate(
+        total=Sum('final_price'))['total'] or 0
+    average_booking_value = Booking.objects.aggregate(
+        avg=Avg('final_price'))['avg'] or 0
+    total_recurring_schedules = RecurringSchedule.objects.filter(
+        active=True).count()
 
-    drivers_by_status = DriverProfile.objects.values('status').annotate(count=Count('id')).order_by('status')
-    driver_status_counts = {item['status']: item['count'] for item in drivers_by_status}
+    drivers_by_status = DriverProfile.objects.values(
+        'status').annotate(count=Count('id')).order_by('status')
+    driver_status_counts = {item['status']: item['count']
+                            for item in drivers_by_status}
 
-    total_payouts = DriverPayout.objects.aggregate(total=Sum('amount'))['total'] or 0
+    total_payouts = DriverPayout.objects.aggregate(total=Sum('amount'))[
+        'total'] or 0
     total_refunds = Refund.objects.aggregate(total=Sum('amount'))['total'] or 0
-    total_wallet_balance = Wallet.objects.aggregate(total=Sum('balance'))['total'] or 0
-    total_loyalty_points = User.objects.filter(role='customer').aggregate(total=Sum('loyalty_points'))['total'] or 0
+    total_wallet_balance = Wallet.objects.aggregate(
+        total=Sum('balance'))['total'] or 0
+    total_loyalty_points = User.objects.filter(role='customer').aggregate(
+        total=Sum('loyalty_points'))['total'] or 0
     total_driver_invitations = DriverInvitation.objects.count()
-    pending_driver_invitations = DriverInvitation.objects.filter(status=DriverInvitation.Status.PENDING).count()
+    pending_driver_invitations = DriverInvitation.objects.filter(
+        status=DriverInvitation.Status.PENDING).count()
     total_bulk_uploads = BulkUpload.objects.count()
-    total_processed_bulk_uploads = BulkUpload.objects.filter(processed=True).count()
+    total_processed_bulk_uploads = BulkUpload.objects.filter(
+        processed=True).count()
     total_validated_addresses = Address.objects.filter(validated=True).count()
 
-    total_successful_payments = PaymentTransaction.objects.filter(status='success').count()
+    total_successful_payments = PaymentTransaction.objects.filter(
+        status='success').count()
     total_payments = PaymentTransaction.objects.count()
-    payment_success_rate = (total_successful_payments / total_payments * 100) if total_payments > 0 else 0
-    average_driver_rating = DriverRating.objects.aggregate(avg=Avg('rating'))['avg'] or 0
+    payment_success_rate = (total_successful_payments /
+                            total_payments * 100) if total_payments > 0 else 0
+    average_driver_rating = DriverRating.objects.aggregate(avg=Avg('rating'))[
+        'avg'] or 0
 
-    top_service_type = ServiceType.objects.annotate(usage=Count('quotes__bookings')).order_by('-usage').first()
+    top_service_type = ServiceType.objects.annotate(
+        usage=Count('quotes__bookings')).order_by('-usage').first()
     top_service_type_name = top_service_type.name if top_service_type else 'N/A'
     top_service_type_usage = top_service_type.usage if top_service_type else 0
     total_failed_bookings = Booking.objects.filter(status='failed').count()
-    total_cancelled_bookings = Booking.objects.filter(status='cancelled').count()
+    total_cancelled_bookings = Booking.objects.filter(
+        status='cancelled').count()
+
+    # Support KPIs
+    total_tickets = Ticket.objects.count()
+    open_tickets = Ticket.objects.filter(
+        status=TicketStatus.OPEN).count()  # Assuming OPEN in TicketStatus
+    # Adjust 'type' filter as per your TicketType
+    complaints = Ticket.objects.filter(type='complaint').count()
+    # average_resolution_time = Ticket.objects.filter(status=TicketStatus.RESOLVED).aggregate(
+    #     # Example metric
+    #     avg=Avg(updated_at - created_at))['avg'] or timedelta(0)
+
+    # Recent Open Tickets Table (similar to recent_bookings)
+    recent_open_tickets = Ticket.objects.filter(status=TicketStatus.OPEN).order_by('-created_at')[:10].values(
+        'id', 'subject', 'status', 'priority', 'created_at', 'user__email', 'guest_email'
+    )
+    recent_open_tickets_table = [
+        {
+            'id': str(ticket['id'])[:8],
+            'subject': ticket['subject'],
+            'user': ticket['user__email'] or ticket['guest_email'],
+            'priority': ticket['priority'],
+            'status': ticket['status'],
+            'created_at': ticket['created_at'].strftime('%Y-%m-%d %H:%M')
+        }
+        for ticket in recent_open_tickets]
+
+    # ********************************************************************************
+    # Add Route/Hub/Driver KPIs
+    # ********************************************************************************
+
+    total_routes = Route.objects.count()
+    routes_by_status = Route.objects.values(
+        'status').annotate(count=Count('id'))
+    route_status_counts = {item['status']: item['count']
+                           for item in routes_by_status}
+    total_hubs = Hub.objects.count()
+    total_assigned_jobs = Booking.objects.filter(status='assigned').count()
+    drivers_with_jobs = DriverProfile.objects.annotate(job_count=Count(
+        'bookings')).filter(job_count__gt=0).count()  # FIXED HERE
+
+    # Recent Routes Table (optimized with prefetch)
+    recent_routes = Route.objects.prefetch_related(
+        'bookings', 'driver').order_by('-id')[:5]
+    recent_routes_table = [
+        {
+            'id': route.id,
+            'driver': route.driver.user.full_name if route.driver else 'Unassigned',
+            'leg_type': route.leg_type,
+            'status': route.status,
+            'bookings': route.bookings.count(),
+            'total_time': f"{route.total_time_hours:.2f} hours" if route.total_time_hours else "N/A",
+        } for route in recent_routes
+    ]
+
+    # Charts: Route status pie (handle empty data)
+    route_chart_data = {
+        'labels': list(route_status_counts.keys()) or ['No Data'],
+        'data': list(route_status_counts.values()) or [0],
+        # Colors (cycle if more)
+        'backgroundColor': ['#FF6384', '#36A2EB', '#FFCE56'],
+    }
 
     # Chart Data: Bookings over the last 7 days
     today = timezone.now().date()
@@ -67,11 +151,16 @@ def dashboard_callback(request, context):
     for i in range(7):
         day = today - timedelta(days=i)
         count = Booking.objects.filter(created_at__date=day).count()
-        revenue = Booking.objects.filter(created_at__date=day).aggregate(total=Sum('final_price'))['total'] or 0
-        payouts = DriverPayout.objects.filter(created_at__date=day).aggregate(total=Sum('amount'))['total'] or 0
-        bookings_data.append({'date': day.strftime('%Y-%m-%d'), 'count': count})
-        revenue_data.append({'date': day.strftime('%Y-%m-%d'), 'revenue': revenue})
-        payout_data.append({'date': day.strftime('%Y-%m-%d'), 'payout': payouts})
+        revenue = Booking.objects.filter(created_at__date=day).aggregate(
+            total=Sum('final_price'))['total'] or 0
+        payouts = DriverPayout.objects.filter(
+            created_at__date=day).aggregate(total=Sum('amount'))['total'] or 0
+        bookings_data.append(
+            {'date': day.strftime('%Y-%m-%d'), 'count': count})
+        revenue_data.append(
+            {'date': day.strftime('%Y-%m-%d'), 'revenue': revenue})
+        payout_data.append(
+            {'date': day.strftime('%Y-%m-%d'), 'payout': payouts})
 
     chart_data = json.dumps({
         'labels': [d['date'] for d in reversed(bookings_data)],
@@ -129,7 +218,8 @@ def dashboard_callback(request, context):
     })
 
     # Chart: Bookings by Service Type
-    service_type_usage = ServiceType.objects.annotate(usage=Count('quotes__bookings')).values('name', 'usage').order_by('-usage')
+    service_type_usage = ServiceType.objects.annotate(usage=Count(
+        'quotes__bookings')).values('name', 'usage').order_by('-usage')
     service_labels = [item['name'] for item in service_type_usage]
     service_data = [item['usage'] for item in service_type_usage]
     service_chart_data = json.dumps({
@@ -142,7 +232,8 @@ def dashboard_callback(request, context):
     })
 
     # Chart: Ratings Distribution
-    ratings_distribution = DriverRating.objects.values('rating').annotate(count=Count('id')).order_by('rating')
+    ratings_distribution = DriverRating.objects.values(
+        'rating').annotate(count=Count('id')).order_by('rating')
     ratings_labels = [str(item['rating']) for item in ratings_distribution]
     ratings_data = [item['count'] for item in ratings_distribution]
     ratings_chart_data = json.dumps({
@@ -155,8 +246,10 @@ def dashboard_callback(request, context):
     })
 
     # Chart: Payments by Method
-    payment_methods = PaymentTransaction.objects.values('method__method_type').annotate(count=Count('id')).order_by('method__method_type')
-    payment_method_labels = [item['method__method_type'] for item in payment_methods]
+    payment_methods = PaymentTransaction.objects.values(
+        'method__method_type').annotate(count=Count('id')).order_by('method__method_type')
+    payment_method_labels = [item['method__method_type']
+                             for item in payment_methods]
     payment_method_data = [item['count'] for item in payment_methods]
     payment_method_chart_data = json.dumps({
         'labels': payment_method_labels,
@@ -221,5 +314,13 @@ def dashboard_callback(request, context):
         'ratings_chart_data': ratings_chart_data,
         'payment_method_chart_data': payment_method_chart_data,
         'recent_bookings_table': recent_bookings_table,
+        # Route/Hub/Driver KPIs
+        'total_routes': total_routes,
+        'route_status_counts': route_status_counts,
+        'total_hubs': total_hubs,
+        'total_assigned_jobs': total_assigned_jobs,
+        'drivers_with_jobs': drivers_with_jobs,
+        'recent_routes_table': recent_routes_table,
+        'route_chart_data': json.dumps(route_chart_data),  # JSON for JS rendering if needed
     })
     return context
