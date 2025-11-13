@@ -234,6 +234,9 @@ BACKEND_URL = env("BACKEND_URL", default="http://localhost:8000")
 GOOGLE_CLIENT_ID = env("CLIENT_ID")
 GOOGLE_CLIENT_SECRET = env("CLIENT_SECRET")
 
+# google api key
+GOOGLE_MAPS_API_KEY = env("GOOGLE_MAPS_API_KEY")
+
 # JWT settings for consistency with existing auth
 SOCIAL_AUTH_JSONFIELD_ENABLED = True
 SOCIAL_AUTH_USER_MODEL = 'users.User'
@@ -482,6 +485,30 @@ UNFOLD = {
                     },
                 ],
             },
+            # New: Route Optimization Section
+            {
+                "title": _("Route Optimization"),
+                "icon": "route",  # Material Icon (or "map" if not available)
+                "link": "",  # Non-clickable parent
+                "separator": True,
+                "collapsible": True,
+                "items": [
+                    {
+                        "title": _("Hubs"),
+                        "icon": "warehouse",  # Material Icon for hubs
+                        "link": reverse_lazy("admin:bookings_hub_changelist"),
+                        "permission": lambda request: request.user.is_superuser,
+                    },
+                    {
+                        "title": _("Routes"),
+                        "icon": "alt_route",  # Material Icon for routes
+                        "link": reverse_lazy("admin:bookings_route_changelist"),
+                        "permission": lambda request: request.user.is_superuser,
+                        # Optional: Badge for pending routes (integrate with badge_callback if needed)
+                        # "badge": lambda request: Route.objects.filter(status='pending').count(),
+                    },
+                ],
+            },
             {
                 "title": _("Tracking"),  # Parent item for submenu
                 "icon": "directions_car",  # Valid Material Icon
@@ -522,6 +549,36 @@ UNFOLD = {
                         "link": reverse_lazy("admin:business_businesspricing_changelist"),
                         "permission": lambda request: request.user.is_superuser,
                     },
+                ],
+            },
+
+            # SUPPORT SECTION
+            {
+                "title": _("Support"),
+                "icon": "support_agent",  # Material Icon for support
+                "link": "",  # Non-clickable parent
+                "separator": True,
+                "collapsible": True,
+                "items": [
+                    {
+                        "title": _("Open Tickets"),
+                        "icon": "list_alt",
+                        "link": reverse_lazy("admin:support_ticket_changelist"),
+
+                        "permission": lambda request: request.user.is_superuser,
+                    },
+                    {
+                        "title": _("All Tickets"),
+                        "icon": "list",
+                        "link": reverse_lazy("admin:support_ticket_changelist"),
+                        "permission": lambda request: request.user.is_superuser,
+                    },
+                    # {
+                    #     "title": _("Ticket Types"),
+                    #     "icon": "category",
+                    #     "link": reverse_lazy("admin:support_tickettype_changelist"),
+                    #     "permission": lambda request: request.user.is_superuser,
+                    # },
                 ],
             },
         ],
