@@ -525,14 +525,14 @@ UNFOLD = {
             },
             {
                 "title": _("Settings/Configs"),  # Parent item for submenu
-                "icon": "directions_car",  # Valid Material Icon
+                "icon": "price_change",  # Valid Material Icon
                 "link": "",  # Empty link for non-clickable parent
                 "separator": True,
                 "collapsible": True,
                 "items": [
                     {
                         "title": _("Pricing"),
-                        "icon": "business_center",
+                        "icon": "price_change",
                         "link": reverse_lazy("admin:bookings_pricingrule_changelist"),
                         "permission": lambda request: request.user.is_superuser,
                     },
