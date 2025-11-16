@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.utils.html import format_html
 from unfold.admin import ModelAdmin
-from .models import Address, Quote, Booking, ShippingType, ServiceType, RecurringSchedule, BulkUpload
+from .models import Address, Quote, Booking, ShippingType, ServiceType, RecurringSchedule, BulkUpload,PricingRule
 from django import forms
 from django.http import HttpResponseRedirect
 from django.shortcuts import render
@@ -354,3 +354,16 @@ class BulkUploadAdmin(ModelAdmin):
     list_display = ("id", "customer", "created_at", "processed")
     list_filter = ("processed", "created_at")
     search_fields = ("customer__email", "customer__full_name")
+
+@admin.register(PricingRule)
+class PricingRuleAdmin(ModelAdmin):
+    list_display = ("key", "value", "description")
+    list_editable = ("value",)
+    search_fields = ("key",)
+    ordering = ("key",)
+
+    # Clear cache when a rule changes
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        from django.core.cache import cache
+        cache.delete("pricing_rules")

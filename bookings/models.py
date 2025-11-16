@@ -294,3 +294,35 @@ class BulkUpload(models.Model):
 # ADD Proof of delivery
 class ProofOfDelivery(models.Model):
     pass
+
+class PricingRule(models.Model):
+    """
+    One row per “pricing knob”.  The admin can change any of these
+    without touching code.
+    """
+    KEY_CHOICES = [
+        ("WEIGHT_PER_KG", "Weight charge per kg"),
+        ("DISTANCE_PER_KM", "Distance charge per km"),
+        ("FRAGILE_MULTIPLIER", "Fragile surcharge (× base price)"),
+        ("INSURANCE_RATE", "Insurance fee (% of insured amount)"),
+        ("MAX_WEIGHT_KG", "Maximum allowed weight (kg)"),
+        ("MAX_DISTANCE_KM", "Maximum allowed distance (km)"),
+    ]
+
+    key = models.CharField(
+        max_length=30, unique=True, choices=KEY_CHOICES, db_index=True
+    )
+    value = models.DecimalField(
+        max_digits=12,
+        decimal_places=4,
+        validators=[MinValueValidator(Decimal("0"))],
+        help_text="Numeric value for this rule",
+    )
+    description = models.TextField(blank=True)
+
+    class Meta:
+        verbose_name = "Pricing rule"
+        verbose_name_plural = "Pricing rules"
+
+    def __str__(self):
+        return f"{self.get_key_display()} = {self.value}"
