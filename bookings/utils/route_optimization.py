@@ -1,258 +1,329 @@
 # bookings/utils/route_optimization.py
-from sklearn.cluster import KMeans  #used for fallback needed
+from sklearn.cluster import KMeans
 import numpy as np
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 from django.utils import timezone
+from datetime import timedelta
 import logging
+from driver.models import DriverShift
+from django.db import transaction
 
 logger = logging.getLogger(__name__)
 
-def cluster_bookings(bookings, num_clusters=5):  # NEW: Re-added as fallback if VRP fails
+def cluster_bookings(bookings, num_clusters=5, hub_lat=None, hub_lng=None):
     if not bookings:
         return {}
-    coords = np.array([[b.pickup_address.latitude, b.pickup_address.longitude]
-                       for b in bookings if b.pickup_address.latitude is not None])
-    if len(coords) == 0:
+
+    coords = []
+    valid_bookings = []
+    invalid_bookings = []
+
+    for b in bookings:
+        addr = b.pickup_address if hasattr(b, 'pickup_address') and b.pickup_address else b.dropoff_address
+        if addr and addr.latitude is not None and addr.longitude is not None:
+            coords.append([float(addr.latitude), float(addr.longitude)])
+            valid_bookings.append(b)
+        else:
+            invalid_bookings.append(b)
+
+    if len(valid_bookings) == 0:
         return {0: bookings}
-    kmeans = KMeans(n_clusters=min(num_clusters, len(coords)), random_state=0)
+
+    original_coords_len = len(coords)
+
+    if hub_lat is not None and hub_lng is not None and original_coords_len > 1:
+        hub_coord = [float(hub_lat), float(hub_lng)]
+        # Add hub multiple times to pull clusters toward it
+        multiples = max(5, original_coords_len // 3)
+        coords = [hub_coord] * multiples + coords
+
+    k = min(num_clusters, len(valid_bookings)) or 1
+    kmeans = KMeans(n_clusters=k, random_state=0, n_init=10)
     labels = kmeans.fit_predict(coords)
-    clusters = {i: [] for i in range(max(labels)+1)}
-    for idx, label in enumerate(labels):
-        clusters[label].append(bookings[idx])
+
+    # Slice only booking labels if hub was added
+    booking_labels = labels[multiples if 'multiples' in locals() else 0 : multiples + original_coords_len if 'multiples' in locals() else None]
+
+    clusters = {i: [] for i in range(k)}
+    for label, booking in zip(booking_labels, valid_bookings):
+        clusters[label].append(booking)
+
+    # Distribute invalid bookings round-robin
+    for i, b in enumerate(invalid_bookings):
+        clusters[i % k].append(b)
+
     return clusters
-def optimize_route_single(cluster, time_matrix, distance_matrix, driver, time_windows=None):  # NEW: Fallback single-vehicle TSP
-    # Similar to old optimize_route, but for one driver
+
+
+def optimize_route_single(cluster, time_matrix, distance_matrix, driver=None, time_windows=None):
+    if not cluster:
+        return [], 0.0, 0.0, driver, []
+
     n = len(cluster) + 1
     manager = pywrapcp.RoutingIndexManager(n, 1, 0)
     routing = pywrapcp.RoutingModel(manager)
 
+    service_sec = 300  # 5 minutes
+
+    service_times = [0] + [service_sec] * len(cluster)
+
     def time_callback(from_index, to_index):
         from_node = manager.IndexToNode(from_index)
         to_node = manager.IndexToNode(to_index)
-        return time_matrix[from_node][to_node]
+        return time_matrix[from_node][to_node] + service_times[from_node]
 
     transit_callback = routing.RegisterTransitCallback(time_callback)
     routing.SetArcCostEvaluatorOfAllVehicles(transit_callback)
 
-    search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-    search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-    search_parameters.time_limit.seconds = 30
-
-    solution = routing.SolveWithParameters(search_parameters)
-    if not solution:
-        return [], 0.0, 0.0, driver
-
-    ordered = []
-    etas = []
-    prev_node = 0
-    route_time_sec = 0
-    route_distance_km = 0.0
-    while not routing.IsEnd(solution.Value(routing.Start(0))):
-        node = manager.IndexToNode(solution.Value(routing.NextVar(prev_node)))
-        if node != 0:
-            ordered.append(cluster[node - 1])
-            etas.append(timezone.now() + timedelta(seconds=route_time_sec))  # Approx eta
-        travel_sec = time_matrix[prev_node][node]
-        travel_km = distance_matrix[prev_node][node]
-        route_time_sec += travel_sec
-        route_distance_km += travel_km
-        prev_node = node
-
-    # Back to hub
-    travel_sec = time_matrix[prev_node][0]
-    travel_km = distance_matrix[prev_node][0]
-    route_time_sec += travel_sec
-    route_distance_km += travel_km
-
-    route_time_sec += len(ordered) * 300  # Service time
-
-    total_time_hours = round(route_time_sec / 3600.0, 3)
-    total_distance_km = round(route_distance_km, 3)
-
-    return ordered, total_time_hours, total_distance_km, driver, etas
-
-def optimize_routes(bookings, hub_lat, hub_lng, time_matrix, distance_matrix, drivers, time_windows=None, leg_type='pickup'):
-    """Optimize multiple routes using multi-vehicle VRP with capacities, time.
-    bookings: list of Booking objects
-    hub_lat, hub_lng: hub coords (for logging)
-    time_matrix: [[sec]] n x n
-    distance_matrix: [[km]] n x n
-    drivers: list of DriverProfile with active shift
-    time_windows: list of (start_sec, end_sec) or None
-    Returns: list of (ordered_bookings, total_time_hours, total_distance_km, driver, etas)
-    """
-    if not bookings or not drivers:
-        logger.warning(f"No bookings ({len(bookings)}) or drivers ({len(drivers)}) for {leg_type}")  # NEW: Log counts
-        return []
-
-    # NEW: Log fetched bookings for debugging
-    logger.info(f"Optimizing {len(bookings)} bookings for {leg_type}: IDs {[b.id for b in bookings]}")
-
-    n = len(bookings) + 1  # 0=hub, 1..n=bookings
-    m = len(drivers)  # vehicles = drivers
-
-    # NEW: Log input sizes
-    logger.debug(f"VRP setup: {n} nodes, {m} vehicles, time_matrix shape {np.array(time_matrix).shape}")
-
-    manager = pywrapcp.RoutingIndexManager(n, m, 0)
-
-    routing = pywrapcp.RoutingModel(manager)
-
-    def time_callback(from_index, to_index):
-        from_node = manager.IndexToNode(from_index)
-        to_node = manager.IndexToNode(to_index)
-        if from_node >= len(time_matrix) or to_node >= len(time_matrix[0]):
-            return 3600 * 10  # Huge penalty for invalid
-        return time_matrix[from_node][to_node]
-
-    transit_callback_index = routing.RegisterTransitCallback(time_callback)
-
-    routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
-
-    service_sec = 300  # 5 min per stop
-    slack_max = 3600  # 1 hour wait max per stop
-    global_time_max = int(8 * 3600)  # 8 hours global max (but per-vehicle overridden)
-
+    # Time dimension with 5 min slack
     routing.AddDimension(
-        transit_callback_index,
-        slack_max,
-        global_time_max,
+        transit_callback,
+        300,   # max slack per vehicle
+        24 * 3600,
         True,
         'Time'
     )
     time_dimension = routing.GetDimensionOrDie('Time')
 
-    for node in range(1, n):
-        index = manager.NodeToIndex(node)
-        routing.AddConstantDimension(service_sec, global_time_max, True, 'Service')
-
-    for v in range(m):
-        max_sec = int(drivers[v].remaining_hours * 3600)
-        time_dimension.SetSpanUpperBoundForVehicle(max_sec, v)
-        routing.SetFixedCostOfVehicle(100000, v)  # High to pack densely
-
-    def demand_weight_callback(from_index):
-        from_node = manager.IndexToNode(from_index)
-        if from_node == 0:
-            return 0
-        return int(bookings[from_node - 1].quote.weight_kg)
-
-    demand_weight_index = routing.RegisterUnaryTransitCallback(demand_weight_callback)
-    routing.AddDimensionWithVehicleCapacity(
-        demand_weight_index,
-        0,
-        [int(d.max_weight_kg) for d in drivers],
-        True,
-        'Weight'
-    )
-
-    def demand_volume_callback(from_index):
-        from_node = manager.IndexToNode(from_index)
-        if from_node == 0:
-            return 0
-        return int(bookings[from_node - 1].quote.volume_m3 * 1000)  # Scale
-
-    demand_volume_index = routing.RegisterUnaryTransitCallback(demand_volume_callback)
-    routing.AddDimensionWithVehicleCapacity(
-        demand_volume_index,
-        0,
-        [int(d.max_volume_m3 * 1000) for d in drivers],
-        True,
-        'Volume'
-    )
-
-    # Time windows (relaxed)
-    if time_windows:
-        now_sec = int(timezone.now().timestamp())
-        for i in range(1, n):
-            sched = time_windows[i-1]
-            if sched:
-                ts = int(sched.timestamp())
-                start = max(0, ts - 14400)
-                end = ts + 14400
-            else:
-                start = now_sec
-                end = now_sec + 86400 * 3
-            if start >= end:
-                start = 0
-                end = 86400 * 7
-            index = manager.NodeToIndex(i)
-            time_dimension.CumulVar(index).SetRange(start, end)
-
-    drop_penalty = 1000000
-    for node in range(1, n):
-        routing.AddDisjunction([manager.NodeToIndex(node)], drop_penalty)
-
     search_parameters = pywrapcp.DefaultRoutingSearchParameters()
     search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-    search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-    search_parameters.time_limit.seconds = 120  # MODIFIED: Increase to 120s for harder instances
-    search_parameters.solution_limit = 10000
-    search_parameters.log_search = True  # NEW: Log solver progress for debug
+    search_parameters.time_limit.seconds = 60
 
     solution = routing.SolveWithParameters(search_parameters)
-    if not solution:
-        logger.error(f"VRP failed for {len(bookings)} bookings, {m} drivers - falling back to KMeans + single-route")  # NEW: Log failure
-        # NEW: Fallback to KMeans clustering + single-route per cluster
-        clusters = cluster_bookings(bookings, min(5, len(drivers)))
-        routes = []
-        for cluster_id, cluster in clusters.items():
-            if cluster and drivers:  # Assign one driver per cluster
-                driver = drivers.pop(0)  # Simple round-robin
-                ordered, total_time_hours, total_distance_km, _, etas = optimize_route_single(cluster, time_matrix, distance_matrix, driver, time_windows)
-                if ordered:
-                    routes.append((ordered, total_time_hours, total_distance_km, driver, etas))
-        return routes
 
-    # NEW: Extract routes per vehicle
-    routes = []
     now = timezone.now()
-    for v in range(m):
-        index = routing.Start(v)
-        if routing.IsVehicleDropped(v):  # Skip unused
-            continue
+
+    if solution:
         ordered = []
-        etas = []  # For ordered_stops eta
-        prev_node = manager.IndexToNode(index)
-        route_time_sec = 0
+        etas = []
         route_distance_km = 0.0
-        cumul_time_sec = 0
+
+        index = routing.Start(0)
         while not routing.IsEnd(index):
             node = manager.IndexToNode(index)
             if node != 0:
-                ordered.append(bookings[node - 1])
-                # NEW: Cumul time for eta
-                cumul_var = time_dimension.CumulVar(index)
-                cumul_time_sec = solution.Value(cumul_var)
-                eta = now + timedelta(seconds=cumul_time_sec)
-                etas.append(eta)
-            travel_sec = time_matrix[prev_node][node]
-            travel_km = distance_matrix[prev_node][node]
-            route_time_sec += travel_sec
-            route_distance_km += travel_km
-            prev_node = node
-            index = solution.Value(routing.NextVar(index))
-        # Back to hub
-        travel_sec = time_matrix[prev_node][0]
-        travel_km = distance_matrix[prev_node][0]
-        route_time_sec += travel_sec
-        route_distance_km += travel_km
+                ordered.append(cluster[node - 1])
+                eta_sec = solution.Value(time_dimension.CumulVar(index))
+                etas.append(now + timedelta(seconds=eta_sec))
 
-        # Add service times
-        route_time_sec += len(ordered) * service_sec
+            next_index = solution.Value(routing.NextVar(index))
+            from_node = node
+            to_node = manager.IndexToNode(next_index)
+            route_distance_km += distance_matrix[from_node][to_node]
 
-        total_time_hours = round(route_time_sec / 3600.0, 3)  # MODIFIED: Round to 3 decimals
-        total_distance_km = round(route_distance_km, 3)  # MODIFIED: Round to 3 decimals
+            index = next_index
 
-        # NEW: Min time check (revenue risk mitigation)
-        min_threshold = 4.0  # Example: Flag if <4 hours
-        if total_time_hours < min_threshold:
-            logger.warning(f"Short route {total_time_hours:.3f}h for driver {drivers[v].id} - consider requeuing")
-            # Optional: Skip creation, requeue bookings (not implemented here)
+        total_time_sec = solution.Value(time_dimension.CumulVar(index))
+        total_time_hours = round(total_time_sec / 3600.0, 3)
+        total_distance_km = round(route_distance_km, 3)
 
-        if ordered:  # Only if route used
-            logger.info(f"Route for driver {v}: {len(ordered)} stops, {total_time_hours:.3f}h, {total_distance_km:.3f}km")
-            routes.append((ordered, total_time_hours, total_distance_km, drivers[v], etas))  # Added etas
+        return ordered, total_time_hours, total_distance_km, driver, etas
 
-    logger.info(f"VRP success: {len(routes)} routes created")
+    else:
+        logger.warning("TSP failed → using arbitrary order")
+        ordered = cluster[:]
+        etas = [now + timedelta(minutes=40 * i) for i in range(len(cluster))]  # reasonable spacing
+        total_hours = round((len(cluster) * 0.5) + 2.0, 3)  # ~30 min avg per stop incl travel
+        return ordered, total_hours, 80.0, driver, etas
+
+
+def optimize_routes(bookings, hub_lat, hub_lng, time_matrix, distance_matrix, drivers, time_windows=None, leg_type='pickup'):
+    if not bookings:
+        logger.info(f"No bookings for {leg_type}")
+        return []
+
+    logger.info(f"Optimizing {len(bookings)} {leg_type}(s) with {len(drivers)} driver(s)")
+
+    routes = []
+    service_sec = 300
+
+    try:
+        # ============ FULL VRP (always attempted) ============
+        n = len(bookings) + 1
+        m = len(drivers)
+
+        if m == 0:
+            raise ValueError("No drivers available")
+
+        manager = pywrapcp.RoutingIndexManager(n, m, 0)
+        routing = pywrapcp.RoutingModel(manager)
+
+        service_times = [0] + [service_sec] * len(bookings)
+
+        def time_callback(from_index, to_index):
+            from_node = manager.IndexToNode(from_index)
+            to_node = manager.IndexToNode(to_index)
+            return time_matrix[from_node][to_node] + service_times[from_node]
+
+        transit_callback_index = routing.RegisterTransitCallback(time_callback)
+        routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
+
+        # Time dimension
+        routing.AddDimension(
+            transit_callback_index,
+            300,  # 5 min slack
+            24 * 3600,
+            True,
+            'Time'
+        )
+        time_dimension = routing.GetDimensionOrDie('Time')
+
+        # Vehicle time limits - allow up to remaining + 4h overtime
+        for v in range(m):
+            shift = DriverShift.get_or_create_today(drivers[v])
+            max_hours = shift.remaining_hours + 4.0
+            max_sec = int(max_hours * 3600)
+            time_dimension.SetSpanUpperBoundForVehicle(max_sec, v)
+            routing.SetFixedCostOfVehicle(50000, v)  # encourage balanced use
+
+        # Weight dimension
+        def weight_callback(from_index):
+            node = manager.IndexToNode(from_index)
+            return 0 if node == 0 else float(bookings[node - 1].quote.weight_kg or 0)
+
+        weight_index = routing.RegisterUnaryTransitCallback(weight_callback)
+        routing.AddDimensionWithVehicleCapacity(
+            weight_index,
+            0,
+            [float(d.max_weight_kg or 1000) for d in drivers],
+            True,
+            'Weight'
+        )
+
+        # Volume dimension
+        def volume_callback(from_index):
+            node = manager.IndexToNode(from_index)
+            return 0 if node == 0 else float(bookings[node - 1].quote.volume_m3 or 0) * 1000
+
+        volume_index = routing.RegisterUnaryTransitCallback(volume_callback)
+        routing.AddDimensionWithVehicleCapacity(
+            volume_index,
+            0,
+            [int((d.max_volume_m3 or 10) * 1000) for d in drivers],
+            True,
+            'Volume'
+        )
+
+        # Soft time windows
+        if time_windows:
+            now = timezone.now()
+            for i in range(1, n):
+                start, end = time_windows[i - 1]
+                if not start or not end:
+                    continue
+                start_sec = max(0, int((start - now).total_seconds()))
+                end_sec = int((end - now).total_seconds())
+                index = manager.NodeToIndex(i)
+                time_dimension.SetCumulVarSoftLowerBound(index, start_sec, 1000)
+                time_dimension.SetCumulVarSoftUpperBound(index, end_sec, 10000)
+
+        search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+        search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+        search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+        search_parameters.time_limit.seconds = 300
+        search_parameters.solution_limit = 20000
+
+        solution = routing.SolveWithParameters(search_parameters)
+
+        if solution:
+            now = timezone.now()
+            for v in range(m):
+                index = routing.Start(v)
+                if not routing.IsVehicleUsed(solution, v):
+                    continue
+
+                ordered = []
+                etas = []
+                route_distance_km = 0.0
+
+                while not routing.IsEnd(index):
+                    node = manager.IndexToNode(index)
+                    if node != 0:
+                        ordered.append(bookings[node - 1])
+                        eta_sec = solution.Value(time_dimension.CumulVar(index))
+                        etas.append(now + timedelta(seconds=eta_sec))
+
+                    next_index = solution.Value(routing.NextVar(index))
+                    from_node = node
+                    to_node = manager.IndexToNode(next_index)
+                    route_distance_km += distance_matrix[from_node][to_node]
+
+                    index = next_index
+
+                total_time_sec = solution.Value(time_dimension.CumulVar(index))
+                total_time_hours = round(total_time_sec / 3600.0, 3)
+                total_distance_km = round(route_distance_km, 3)
+
+                driver = drivers[v]
+                shift = DriverShift.get_or_create_today(driver)
+
+                total_weight = sum(float(b.quote.weight_kg or 0) for b in ordered)
+                total_volume = sum(float(b.quote.volume_m3 or 0) for b in ordered)
+
+                with transaction.atomic():
+                    current = shift.current_load or {'hours': 0.0, 'weight': 0.0, 'volume': 0.0}
+                    shift.current_load = {
+                        'hours': current['hours'] + total_time_hours,
+                        'weight': current['weight'] + total_weight,
+                        'volume': current['volume'] + total_volume,
+                    }
+                    shift.save()
+
+                routes.append((ordered, total_time_hours, total_distance_km, driver, etas))
+
+            logger.info(f"VRP succeeded: {len(routes)} routes created")
+            return routes
+
+    except Exception as e:
+        logger.error(f"VRP failed ({e}) → using clustering fallback")
+
+    # ============ CLUSTERING FALLBACK (guaranteed assignment) ============
+    logger.info("Running clustering fallback")
+
+    max_reasonable_clusters = max(1, len(bookings) // 4 + 1)
+    num_clusters = min(len(drivers), max_reasonable_clusters) if drivers else 1
+
+    clusters = cluster_bookings(
+        bookings,
+        num_clusters=num_clusters,
+        hub_lat=hub_lat,
+        hub_lng=hub_lng
+    )
+
+    # Sort drivers by remaining hours (most available first)
+    driver_pool = sorted(
+        drivers,
+        key=lambda d: DriverShift.get_or_create_today(d).remaining_hours if hasattr(d, 'DriverShift') else 0,
+        reverse=True
+    ) if drivers else []
+
+    sorted_clusters = sorted(clusters.values(), key=len, reverse=True)
+
+    for cluster_list in sorted_clusters:
+        if not cluster_list:
+            continue
+
+        driver = driver_pool.pop(0) if driver_pool else None
+
+        ordered, hrs, km, _, etas = optimize_route_single(
+            cluster_list, time_matrix, distance_matrix, driver, time_windows
+        )
+
+        total_weight = sum(float(b.quote.weight_kg or 0) for b in ordered)
+        total_volume = sum(float(b.quote.volume_m3 or 0) for b in ordered)
+
+        routes.append((ordered, hrs, km, driver, etas))
+
+        if driver:
+            shift = DriverShift.get_or_create_today(driver)
+            with transaction.atomic():
+                current = shift.current_load or {'hours': 0.0, 'weight': 0.0, 'volume': 0.0}
+                shift.current_load = {
+                    'hours': current['hours'] + hrs,
+                    'weight': current['weight'] + total_weight,
+                    'volume': current['volume'] + total_volume,
+                }
+                shift.save()
+
+    logger.info(f"Fallback created {len(routes)} routes ({len([r for r in routes if r[3]])} assigned)")
     return routes
