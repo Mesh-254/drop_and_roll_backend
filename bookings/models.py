@@ -136,6 +136,7 @@ class Quote(models.Model):
     class Meta:
         indexes = [
             models.Index(fields=["created_at"]),
+            models.Index(fields=['service_type']),
         ]
 
     def save(self, *args, **kwargs):
@@ -328,6 +329,10 @@ class Route(models.Model):
     driver = models.ForeignKey(
         DriverProfile, on_delete=models.SET_NULL, null=True)
     bookings = models.ManyToManyField(Booking)  # Grouped bookings
+
+    shift = models.ForeignKey('driver.DriverShift', on_delete=models.SET_NULL, null=True, related_name='routes')
+    visible_at = models.DateTimeField(default=timezone.now)  # When driver can see it in dashboard
+
     leg_type = models.CharField(
         choices=[('pickup', 'Pickup'), ('delivery', 'Delivery')])
     # [{'booking_id': str(uuid), 'address': {'lat': float, 'lng': float}, 'eta': datetime}]
