@@ -22,13 +22,13 @@ from django.db.models import Case, When, IntegerField
 from bookings.models import Booking, BookingStatus, Route
 from bookings.serializers import BookingSerializer
 from driver.models import (
-    DriverAvailability, DriverPayout, DriverRating, DriverDocument,
+    DriverAvailability, DriverPayout, DriverRating, DriverDocument, DriverShift
 )
 from driver.serializers import (
     DriverAvailabilitySerializer,
     DriverPayoutSerializer, DriverPayoutCreateSerializer,
     DriverRatingSerializer, DriverDocumentSerializer, DriverInviteCreateSerializer, DriverInviteDetailSerializer,
-    DriverInviteAcceptSerializer,
+    DriverInviteAcceptSerializer, DriverShiftSerializer,
 )
 from users.serializers import UserSerializer
 from .permissions import IsAdmin, IsDriver, IsCustomer
@@ -332,54 +332,10 @@ class DriverAssignedBookingViewSet(mixins.ListModelMixin, viewsets.GenericViewSe
         route = Route.objects.filter(driver=request.user.driver_profile, status='assigned').first()
         return Response({'ordered_stops': route.ordered_stops})  # Next stop is [0]
 
-# class DriverAssignedBookingViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
-#     serializer_class = BookingSerializer
-#     permission_classes = [IsAuthenticated, IsDriver | IsAdmin]
-#
-#     def get_queryset(self):
-#         if getattr(self, 'swagger_fake_view', False):
-#             return Booking.objects.none()
-#         user = self.request.user
-#         driver_id = self.request.query_params.get("driver_id")
-#
-#         # Base queryset
-#         queryset = Booking.objects.select_related(
-#             "pickup_address", "dropoff_address", "customer", "driver", "quote"
-#         ).prefetch_related(
-#             "quote__shipping_type", "quote__service_type"
-#         ).filter(status=BookingStatus.ASSIGNED).order_by("-created_at")
-#
-#         # If driver_id is provided and user is admin
-#         if driver_id and hasattr(user, "role") and user.role == "admin":
-#             try:
-#                 # Validate driver_id as UUID
-#                 uuid.UUID(driver_id)
-#                 queryset = queryset.filter(driver_id=driver_id)
-#             except ValueError:
-#                 return Booking.objects.none()  # Invalid driver_id
-#         # For non-admin drivers, restrict to their own bookings
-#         elif hasattr(user, "driver_profile"):
-#             queryset = queryset.filter(driver=user.driver_profile)
-#         else:
-#             return Booking.objects.none()  # No driver profile
-#
-#         return queryset
-#
-#     def list(self, request, *args, **kwargs):
-#         # Validate token if provided in Authorization header
-#         auth_token = request.META.get("HTTP_AUTHORIZATION", "").split("Token ")[1] if "Token " in request.META.get(
-#             "HTTP_AUTHORIZATION", "") else None
-#         if auth_token:
-#             try:
-#                 token = Token.objects.get(key=auth_token)
-#                 user = token.user
-#                 if not hasattr(user, "driver_profile") and user.role != "admin":
-#                     return Response({"detail": "Invalid token: User is not a driver or admin"},
-#                                     status=status.HTTP_403_FORBIDDEN)
-#             except Token.DoesNotExist:
-#                 return Response({"detail": "Invalid token"}, status=status.HTTP_401_UNAUTHORIZED)
-#         return super().list(request, *args, **kwargs)
-
+class DriverShiftViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = DriverShiftSerializer  # New serializer
+    def get_queryset(self):
+        return DriverShift.objects.filter(driver=self.request.user.driver_profile, start_time__date=timezone.now().date())
 
 class DriverMetricsView(APIView):
     permission_classes = [IsDriver]
