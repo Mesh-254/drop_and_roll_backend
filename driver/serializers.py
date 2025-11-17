@@ -5,7 +5,7 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from driver.models import (
-    DriverAvailability, DriverPayout, DriverRating, DriverDocument, DriverProfile, DriverInvitation
+    DriverAvailability, DriverPayout, DriverRating, DriverDocument, DriverProfile, DriverInvitation, DriverShift
 )
 
 User = get_user_model()
@@ -189,3 +189,10 @@ class DriverInviteSerializer(serializers.Serializer):
             status="inactive"
         )
         return user
+
+class DriverShiftSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DriverShift
+        fields = ["__all__"]
+        read_only_fields = ["id", "current_load"]
+        
