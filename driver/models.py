@@ -7,6 +7,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import models
 from django.utils import timezone
+from django.db import transaction
 
 User = get_user_model()
 
@@ -50,16 +51,12 @@ class DriverProfile(models.Model):
     max_volume_m3 = models.DecimalField(max_digits=10, decimal_places=2, default=1.0)   # Add for dimensions
 
     def save(self, *args, **kwargs):
-        super().save(*args, **kwargs)
-        # Auto-create shift if none today
-        today = timezone.now().date()
-        if not self.shifts.filter(start_time__date=today).exists():
-            start = timezone.now()
-            end = start + timedelta(hours=8)
-            DriverShift.objects.create(driver=self, start_time=start, end_time=end)
+            super().save(*args, **kwargs)
+            # Auto-create today's shift if missing
+            DriverShift.get_or_create_today(self)
 
     def __str__(self):
-        return f"DriverProfile({self.user.email}, {self.user.role})"
+            return f"DriverProfile({self.user.email}, {self.user.role})"
     
 
 class DriverShift(models.Model):
@@ -82,6 +79,9 @@ class DriverShift(models.Model):
     max_hours = models.FloatField(default=8.0)
     current_load = models.JSONField(default=dict)
 
+    max_hours = models.FloatField(default=8.0)  # Standardized to 8h
+    MIN_ROUTE_HOURS = 4.0  # Configurable threshold for "short" routes
+
     def save(self, *args, **kwargs):
         # NEW: Initialize current_load with zeros if not set
         if not self.current_load:
@@ -99,22 +99,36 @@ class DriverShift(models.Model):
 
     @classmethod
     def get_or_create_today(cls, driver):
-        """Get or create a shift for today: 8:00 AM to 6:00 PM (10 hours)."""
-        today = timezone.localtime(timezone.now()).date()  # Use local time
-        start_time = timezone.make_aware(timezone.datetime.combine(today, timezone.datetime.min.time().replace(hour=8)))
-        end_time = start_time + timedelta(hours=10)
-        
-        shift, created = cls.objects.get_or_create(
-            driver=driver,
-            start_time=start_time,
-            defaults={
-                'end_time': end_time,
-                'max_hours': 10.0,  # Updated to 10h
-                'current_load': {'weight': 0.0, 'volume': 0.0, 'hours': 0.0}
-            }
+        """Safely get or create today's shift. Handles duplicates and race conditions."""
+        today = timezone.localtime(timezone.now()).date()
+        start_time = timezone.make_aware(
+            timezone.datetime.combine(today, timezone.datetime.min.time().replace(hour=8))
         )
-       
-        return shift
+        end_time = start_time + timedelta(hours=10)
+
+        # Atomic block + select_for_update to prevent race conditions
+        with transaction.atomic():
+            shifts = cls.objects.select_for_update().filter(
+                driver=driver,
+                start_time__date=today
+            )
+
+            if shifts.exists():
+                # If multiple (from past bug), return the first and delete extras
+                shift = shifts.first()
+                if shifts.count() > 1:
+                    shifts.exclude(pk=shift.pk).delete()
+                return shift
+
+            # Create new
+            shift = cls.objects.create(
+                driver=driver,
+                start_time=start_time,
+                end_time=end_time,
+                max_hours=10.0,
+                current_load={'weight': 0.0, 'volume': 0.0, 'hours': 0.0}
+            )
+            return shift
 
 
 
