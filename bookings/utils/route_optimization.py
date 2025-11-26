@@ -140,10 +140,13 @@ def optimize_routes(bookings, hub_lat, hub_lng, time_matrix, distance_matrix, dr
     try:
         # ============ FULL VRP  SOLVER (always attempted) ============
         n = len(bookings) + 1
-        m = len(drivers)
-
-        if m == 0:
-            raise ValueError("No drivers available")
+        orig_m = len(drivers)
+        dummy = False
+        if orig_m == 0:
+            m = 1  # Use dummy vehicle to allow VRP to run
+            dummy = True
+        else:
+            m = orig_m
 
         manager = pywrapcp.RoutingIndexManager(n, m, 0)
         routing = pywrapcp.RoutingModel(manager)
@@ -174,8 +177,11 @@ def optimize_routes(bookings, hub_lat, hub_lng, time_matrix, distance_matrix, dr
 
         # Vehicle time limits - allow up to remaining + 4h overtime
         for v in range(m):
-            shift = DriverShift.get_or_create_today(drivers[v])
-            max_hours = shift.remaining_hours + 4.0
+            if dummy:
+                max_hours = 24.0  # Large default for dummy
+            else:
+                shift = DriverShift.get_or_create_today(drivers[v])
+                max_hours = shift.remaining_hours + 4.0
             max_sec = round(max_hours * 3600)
             time_dimension.SetSpanUpperBoundForVehicle(max_sec, v)
             routing.SetFixedCostOfVehicle(50000, v)  # encourage balanced use
@@ -186,10 +192,11 @@ def optimize_routes(bookings, hub_lat, hub_lng, time_matrix, distance_matrix, dr
             return 0 if node == 0 else float(bookings[node - 1].quote.weight_kg or 0)
 
         weight_index = routing.RegisterUnaryTransitCallback(weight_callback)
+        weight_capacities = [float(d.max_weight_kg or 1000) for d in drivers] if not dummy else [10000.0] * m
         routing.AddDimensionWithVehicleCapacity(
             weight_index,
             0,
-            [float(d.max_weight_kg or 1000) for d in drivers],
+            weight_capacities,
             True,
             'Weight'
         )
@@ -200,10 +207,11 @@ def optimize_routes(bookings, hub_lat, hub_lng, time_matrix, distance_matrix, dr
             return 0 if node == 0 else float(bookings[node - 1].quote.volume_m3 or 0) * 1000
 
         volume_index = routing.RegisterUnaryTransitCallback(volume_callback)
+        volume_capacities = [int((d.max_volume_m3 or 10) * 1000) for d in drivers] if not dummy else [100000] * m
         routing.AddDimensionWithVehicleCapacity(
             volume_index,
             0,
-            [int((d.max_volume_m3 or 10) * 1000) for d in drivers],
+            volume_capacities,
             True,
             'Volume'
         )
@@ -258,25 +266,28 @@ def optimize_routes(bookings, hub_lat, hub_lng, time_matrix, distance_matrix, dr
                 total_time_hours = round(total_time_sec / 3600.0, 3)
                 total_distance_km = round(route_distance_km, 3)
 
-                driver = drivers[v]
-                shift = DriverShift.get_or_create_today(driver)
+                driver = drivers[v] if v < orig_m else None
+                if driver:
+                    shift = DriverShift.get_or_create_today(driver)
 
-                total_weight = sum(float(b.quote.weight_kg or 0) for b in ordered)
-                total_volume = sum(float(b.quote.volume_m3 or 0) for b in ordered)
+                    total_weight = sum(float(b.quote.weight_kg or 0) for b in ordered)
+                    total_volume = sum(float(b.quote.volume_m3 or 0) for b in ordered)
 
-                with transaction.atomic():
-                    current = shift.current_load or {'hours': 0.0, 'weight': 0.0, 'volume': 0.0}
-                    shift.current_load = {
-                        'hours': current['hours'] + total_time_hours,
-                        'weight': current['weight'] + total_weight,
-                        'volume': current['volume'] + total_volume,
-                    }
-                    shift.save()
+                    with transaction.atomic():
+                        current = shift.current_load or {'hours': 0.0, 'weight': 0.0, 'volume': 0.0}
+                        shift.current_load = {
+                            'hours': current['hours'] + total_time_hours,
+                            'weight': current['weight'] + total_weight,
+                            'volume': current['volume'] + total_volume,
+                        }
+                        shift.save()
 
                 routes.append((ordered, total_time_hours, total_distance_km, driver, etas))
 
-            logger.info(f"VRP succeeded: {len(routes)} routes created")
+            logger.info(f"VRP succeeded: {len(routes)} routes created{' (with dummy vehicle)' if dummy else ''}")
             return routes
+        else:
+            raise ValueError("VRP solver found no solution")
 
     except Exception as e:
         logger.error(f"VRP failed ({e}) → using clustering fallback")
