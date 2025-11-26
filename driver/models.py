@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import uuid
 
-from datetime import timedelta
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import models
 from django.utils import timezone
-from django.db import transaction
+
 
 User = get_user_model()
 
@@ -72,8 +71,16 @@ class DriverShift(models.Model):
         }
     - remaining_hours: Computed property
     """
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"  # Unassigned, waiting for driver
+        ASSIGNED = "assigned", "Assigned"  # Driver assigned, but not started
+        ACTIVE = "active", "Active"  # Driver has started (e.g., first pickup)
+        COMPLETED = "completed", "Completed"  # All bookings done
+        OVERDUE = "overdue", "Overdue"  # Past end_time, not completed
+        CANCELLED = "cancelled", "Cancelled"  # Manual cancel
+
     driver = models.ForeignKey(
-        DriverProfile, on_delete=models.CASCADE, related_name='shifts')
+        DriverProfile, on_delete=models.SET_NULL, null=True, blank=True, related_name='shifts')
     start_time = models.DateTimeField()
     end_time = models.DateTimeField()  # Must be start_time + 8 hours
     max_hours = models.FloatField(default=8.0)
@@ -82,11 +89,54 @@ class DriverShift(models.Model):
     max_hours = models.FloatField(default=8.0)  # Standardized to 8h
     MIN_ROUTE_HOURS = 4.0  # Configurable threshold for "short" routes
 
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.PENDING
+    )
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["driver", "status"]),  # For fast checks on open shifts
+            models.Index(fields=["start_time", "end_time"]),  # For overdue queries
+        ]
+    
+
     def save(self, *args, **kwargs):
         # NEW: Initialize current_load with zeros if not set
         if not self.current_load:
             self.current_load = {'weight': 0.0, 'volume': 0.0, 'hours': 0.0}
+
+        # Auto-compute overdue on save (for manual updates)
+        if self.end_time < timezone.now() and self.status not in [self.Status.COMPLETED, self.Status.OVERDUE, self.Status.CANCELLED]:
+            self.status = self.Status.OVERDUE
         super().save(*args, **kwargs)
+
+    @property
+    def is_open(self) -> bool:
+        """Check if shift is ongoing (for assignment rules)."""
+        return self.status in [self.Status.ASSIGNED, self.Status.ACTIVE]
+
+    def update_status(self):
+        """Compute status based on associated routes/bookings (called via signals)."""
+
+        # ADDED: Lazy import here to avoid circular imports
+        from bookings.models import Booking, BookingStatus
+
+        routes = self.routes.all()  # Assuming related_name='routes' on Route
+
+        if not routes.exists():
+            self.status = self.Status.PENDING
+            return
+
+        all_bookings = Booking.objects.filter(route__shift=self)
+        if all_bookings.exists():
+            statuses = set(all_bookings.values_list('status', flat=True))
+            if all(s == BookingStatus.DELIVERED for s in statuses):
+                self.status = self.Status.COMPLETED
+            elif any(s in [BookingStatus.PICKED_UP, BookingStatus.IN_TRANSIT] for s in statuses):
+                self.status = self.Status.ACTIVE
+            else:
+                self.status = self.Status.ASSIGNED
+        self.save()
 
     @property
     def remaining_hours(self) -> float:
@@ -98,38 +148,24 @@ class DriverShift(models.Model):
         return f"{self.driver} {self.start_time.date()} ({self.start_time.strftime('%H:%M')} - {self.end_time.strftime('%H:%M')})"
 
     @classmethod
-    def get_or_create_today(cls, driver):
-        """Safely get or create today's shift. Handles duplicates and race conditions."""
-        today = timezone.localtime(timezone.now()).date()
-        start_time = timezone.make_aware(
-            timezone.datetime.combine(today, timezone.datetime.min.time().replace(hour=8))
+    def get_or_create_today(cls, driver_profile):
+        """
+        Returns the DriverShift instance for today.
+        Always returns the object directly (not a tuple).
+        """
+        today = timezone.now().date()
+        shift, created = cls.objects.get_or_create(
+            driver=driver_profile,
+            # date=today,
+            defaults={
+                'current_load': {'hours': 0.0, 'weight': 0.0, 'volume': 0.0},
+                'start_time': timezone.now().replace(hour=6, minute=0, second=0, microsecond=0),
+                'end_time': timezone.now().replace(hour=18, minute=0, second=0, microsecond=0),
+            }
         )
-        end_time = start_time + timedelta(hours=10)
-
-        # Atomic block + select_for_update to prevent race conditions
-        with transaction.atomic():
-            shifts = cls.objects.select_for_update().filter(
-                driver=driver,
-                start_time__date=today
-            )
-
-            if shifts.exists():
-                # If multiple (from past bug), return the first and delete extras
-                shift = shifts.first()
-                if shifts.count() > 1:
-                    shifts.exclude(pk=shift.pk).delete()
-                return shift
-
-            # Create new
-            shift = cls.objects.create(
-                driver=driver,
-                start_time=start_time,
-                end_time=end_time,
-                max_hours=10.0,
-                current_load={'weight': 0.0, 'volume': 0.0, 'hours': 0.0}
-            )
-            return shift
-
+        shift.status = cls.Status.PENDING if not shift.routes.exists() else shift.status
+        shift.save()
+        return shift
 
 
 
