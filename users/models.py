@@ -64,8 +64,11 @@ class User(AbstractBaseUser, PermissionsMixin):
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = ["full_name"]
 
+    def get_full_name(self):
+        return self.full_name.strip() or self.email.split('@')[0].replace('.', ' ').title()
+
     def __str__(self):
-        return f"{self.full_name} <{self.email}> ({self.role})"
+        return f"{self.get_full_name()} <{self.email}> ({self.role})"
 
     @property
     def is_admin(self) -> bool:
