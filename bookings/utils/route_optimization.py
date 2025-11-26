@@ -138,7 +138,7 @@ def optimize_routes(bookings, hub_lat, hub_lng, time_matrix, distance_matrix, dr
     service_sec = 300
 
     try:
-        # ============ FULL VRP (always attempted) ============
+        # ============ FULL VRP  SOLVER (always attempted) ============
         n = len(bookings) + 1
         m = len(drivers)
 
@@ -153,7 +153,11 @@ def optimize_routes(bookings, hub_lat, hub_lng, time_matrix, distance_matrix, dr
         def time_callback(from_index, to_index):
             from_node = manager.IndexToNode(from_index)
             to_node = manager.IndexToNode(to_index)
-            return time_matrix[from_node][to_node] + service_times[from_node]
+            
+            travel_time = time_matrix[from_node][to_node]
+            service_time = service_times[from_node]
+
+            return int(round(travel_time + service_time))
 
         transit_callback_index = routing.RegisterTransitCallback(time_callback)
         routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
@@ -162,7 +166,7 @@ def optimize_routes(bookings, hub_lat, hub_lng, time_matrix, distance_matrix, dr
         routing.AddDimension(
             transit_callback_index,
             300,  # 5 min slack
-            24 * 3600,
+            24 * 3600, # max time per vehicle
             True,
             'Time'
         )
@@ -172,7 +176,7 @@ def optimize_routes(bookings, hub_lat, hub_lng, time_matrix, distance_matrix, dr
         for v in range(m):
             shift = DriverShift.get_or_create_today(drivers[v])
             max_hours = shift.remaining_hours + 4.0
-            max_sec = int(max_hours * 3600)
+            max_sec = round(max_hours * 3600)
             time_dimension.SetSpanUpperBoundForVehicle(max_sec, v)
             routing.SetFixedCostOfVehicle(50000, v)  # encourage balanced use
 
