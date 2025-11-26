@@ -13,10 +13,11 @@ from bookings.models import BookingStatus, Route, Hub
 from driver.models import DriverProfile, DriverAvailability, DriverShift
 import logging
 from collections import defaultdict
-from django.db.models import Exists, OuterRef, Prefetch, Case, When, F, FloatField, Value, CharField, IntegerField
+from django.db.models import Exists, OuterRef, Prefetch, Case, When, F, FloatField, Value, CharField, IntegerField, Q
 from django.db.models.functions import Cast
 from django.db import transaction
 from dateutil.parser import parse
+from geopy.distance import great_circle
 
 
 @shared_task
@@ -126,244 +127,286 @@ SERVICE_TYPE_TO_BUCKET = {
     'Three Day': 'three_day',
     'Budget': 'three_day',
 }
-
-# ----------------------------------------------------------------------
-# TIER TO DAYS MAPPING (for inferring deadlines)
-# ----------------------------------------------------------------------
-TIER_TO_DAYS = {
-    'same_day': 0,      # Deadline: today
-    'next_day': 1,      # Deadline: tomorrow
-    'three_day': 3,     # Deadline: +3 days
-}
-
-# ----------------------------------------------------------------------
-# CUTOFF FOR BOOKING TIME (e.g., 2 PM – after this, bump same_day to next_day)
-# ----------------------------------------------------------------------
-CUTOFF_HOUR = 14  # 2 PM – configurable
-
-@shared_task
-def optimize_bookings():
+@shared_task(bind=True, max_retries=3, default_retry_delay=60)
+def optimize_bookings(self):
     now = timezone.now()
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    tomorrow_start = today_start + timedelta(days=1)
+    logger.info("Starting route optimization task")
 
     # ------------------------------------------------------------------
-    # 1. BUILD SERVICE-TYPE ANNOTATION (using Case/When for efficiency)
+    # 1. Separate pickup (SCHEDULED) and delivery (AT_HUB) candidates
     # ------------------------------------------------------------------
-    service_type_case = Case(
-        *[When(quote__service_type__name__iexact=key, then=Value(bucket))
-          for key, bucket in SERVICE_TYPE_TO_BUCKET.items()],
-        default=Value('three_day'),  # Fallback to lowest priority
+    service_case = Case(
+        *[When(quote__service_type__name__iexact=k, then=Value(v))
+          for k, v in SERVICE_TYPE_TO_BUCKET.items()],
+        default=Value('three_day'),
         output_field=CharField()
     )
 
-    # ------------------------------------------------------------------
-    # 2. BUILD PRIORITY ANNOTATION (lower number = higher priority)
-    # ------------------------------------------------------------------
-    priority_case = Case(
-        When(service_bucket='same_day', then=Value(0)),
-        When(service_bucket='next_day', then=Value(1)),
-        When(service_bucket='three_day', then=Value(2)),
-        default=Value(2),  # Fallback
-        output_field=IntegerField()
+    pickup_candidates = Booking.objects.filter(
+        status=BookingStatus.SCHEDULED,
+        pickup_address__latitude__isnull=False,
+        dropoff_address__latitude__isnull=False,
+        quote__service_type__isnull=False,
+    ).exclude(
+        Exists(Route.bookings.through.objects.filter(booking_id=OuterRef('pk')))
+    ).annotate(service_bucket=service_case).select_related(
+        'pickup_address', 'dropoff_address', 'quote', 'hub'
     )
 
-    # ------------------------------------------------------------------
-    # 3. FETCH ALL CANDIDATE BOOKINGS (with annotations)
-    # ------------------------------------------------------------------
-    pickups = Booking.objects.filter(
-        status=BookingStatus.SCHEDULED,
-        pickup_address__validated=True,
-        pickup_address__latitude__isnull=False,
-        quote__service_type__isnull=False,
-    ).annotate(
-        service_bucket=service_type_case,
-        priority=priority_case
-    ).exclude(
-        Exists(Route.bookings.through.objects.filter(booking_id=OuterRef('pk')))
-    ).order_by('priority', 'created_at')  # Prioritize urgent + older first
-
-    deliveries = Booking.objects.filter(
+    delivery_candidates = Booking.objects.filter(
         status=BookingStatus.AT_HUB,
-        dropoff_address__validated=True,
+        pickup_address__latitude__isnull=False,
         dropoff_address__latitude__isnull=False,
-    ).annotate(
-        service_bucket=service_type_case,
-        priority=priority_case
+        quote__service_type__isnull=False,
     ).exclude(
         Exists(Route.bookings.through.objects.filter(booking_id=OuterRef('pk')))
-    ).order_by('priority', 'created_at')
+    ).annotate(service_bucket=service_case).select_related(
+        'pickup_address', 'dropoff_address', 'quote', 'hub'
+    )
 
-    logger.info(f"Total candidate pickups: {pickups.count()}")
-    logger.info(f"Total candidate deliveries: {deliveries.count()}")
+    total_candidates = pickup_candidates.count() + delivery_candidates.count()
+    logger.info(f"Found {total_candidates} candidate bookings ({pickup_candidates.count()} pickups, {delivery_candidates.count()} deliveries)")
+
+    if total_candidates == 0:
+        logger.info("No eligible bookings for routing")
+        return
 
     # ------------------------------------------------------------------
-    # 4. BUCKET BY TIER + CREATION TIME ADJUSTMENT
-    #    - If same_day and created after cutoff, bump to next_day
-    #    - Use created_at to infer urgency if no scheduled_at
+    # 2. Get hubs with coordinates
     # ------------------------------------------------------------------
-    same_day_pickups = []
-    next_day_pickups = []
-    three_day_pickups = []
-    same_day_deliveries = []
-    next_day_deliveries = []
-    three_day_deliveries = []
+    hubs = list(Hub.objects.select_related('address').filter(
+        address__latitude__isnull=False,
+        address__longitude__isnull=False
+    ))
 
-    for b in pickups:
-        bucket = b.service_bucket
-        if bucket == 'same_day' and b.created_at.hour >= CUTOFF_HOUR:
-            bucket = 'next_day'  # Bump if afternoon booking
+    if not hubs:
+        logger.error("No hubs with coordinates!")
+        return
 
-        if bucket == 'same_day':
-            same_day_pickups.append(b)
-        elif bucket == 'next_day':
-            next_day_pickups.append(b)
+    MAX_RADIUS_KM = 50
+
+    # ------------------------------------------------------------------
+    # 3. Group PICKUP legs by nearest hub (using pickup_address)
+    # ------------------------------------------------------------------
+    pickup_by_hub = defaultdict(list)
+    for booking in pickup_candidates:
+        distances = [
+            (hub, great_circle(
+                (booking.pickup_address.latitude, booking.pickup_address.longitude),
+                (hub.address.latitude, hub.address.longitude)
+            ).km)
+            for hub in hubs
+        ]
+        nearest_hub, dist = min(distances, key=lambda x: x[1])
+        if dist <= MAX_RADIUS_KM:
+            pickup_by_hub[nearest_hub].append(booking)
         else:
-            three_day_pickups.append(b)
+            logger.warning(f"Booking {booking.id} pickup too far from any hub ({dist:.1f}km)")
 
-    for b in deliveries:
-        bucket = b.service_bucket
-        if bucket == 'same_day' and b.created_at.hour >= CUTOFF_HOUR:
-            bucket = 'next_day'
-
-        if bucket == 'same_day':
-            same_day_deliveries.append(b)
-        elif bucket == 'next_day':
-            next_day_deliveries.append(b)
+    # ------------------------------------------------------------------
+    # 4. Group DELIVERY legs by nearest hub (using dropoff_address)
+    # ------------------------------------------------------------------
+    delivery_by_hub = defaultdict(list)
+    for booking in delivery_candidates:
+        distances = [
+            (hub, great_circle(
+                (booking.dropoff_address.latitude, booking.dropoff_address.longitude),
+                (hub.address.latitude, hub.address.longitude)
+            ).km)
+            for hub in hubs
+        ]
+        nearest_hub, dist = min(distances, key=lambda x: x[1])
+        if dist <= MAX_RADIUS_KM:
+            delivery_by_hub[nearest_hub].append(booking)
         else:
-            three_day_deliveries.append(b)
+            logger.warning(f"Booking {booking.id} delivery too far from any hub ({dist:.1f}km)")
 
     # ------------------------------------------------------------------
-    # 5. LOG BUCKETS (for debugging)
+    # 5. Process each hub-by-hub
     # ------------------------------------------------------------------
-    logger.info(f"Same-day pickups: {len(same_day_pickups)}")
-    logger.info(f"Next-day pickups: {len(next_day_pickups)}")
-    logger.info(f"Three-day pickups: {len(three_day_pickups)}")
-    logger.info(f"Same-day deliveries: {len(same_day_deliveries)}")
-    logger.info(f"Next-day deliveries: {len(next_day_deliveries)}")
-    logger.info(f"Three-day deliveries: {len(three_day_deliveries)}")
-
-    # ------------------------------------------------------------------
-    # 6. PER-HUB PROCESSING
-    # ------------------------------------------------------------------
-    hubs = Hub.objects.prefetch_related('address').all()
-
     for hub in hubs:
-        logger.info(f"--- OPTIMIZING HUB: {hub.name} (ID: {hub.id}) ---")
+        logger.info(f"--- PROCESSING HUB: {hub.name} (ID: {hub.id}) ---")
+        pickups = pickup_by_hub.get(hub, [])
+        deliveries = delivery_by_hub.get(hub, [])
+        logger.info(f"  Pickups: {len(pickups)} | Deliveries: {len(deliveries)}")
 
-        # DRIVERS: Fetch with active shifts
-        drivers_qs = DriverProfile.objects.filter(
-            hub=hub, status='active'
-        ).select_related('availability').prefetch_related(
-            Prefetch('shifts', queryset=DriverShift.objects.filter(
-                start_time__lte=now, end_time__gte=now
-            ), to_attr='active_shifts')
+        # Drivers only from this hub + currently available 
+        # Only drivers without active or assigned shifts
+        available_drivers = list(
+            DriverProfile.objects.filter(
+                hub=hub,
+                availability__available=True,
+                user__is_active=True
+            ).select_related('user', 'availability').annotate(
+                has_open_shift=Exists(DriverShift.objects.filter(
+                    driver=OuterRef('pk'), 
+                    status__in=[DriverShift.Status.ASSIGNED, DriverShift.Status.ACTIVE]
+                ))
+            ).filter(has_open_shift=False) # Only drivers without open shifts
         )
 
-        available_drivers = []
-        for d in drivers_qs:
-            shift = d.active_shifts[0] if d.active_shifts else DriverShift.get_or_create_today(d)
-            avail = d.availability
-            lat = avail.lat if avail and avail.lat else hub.address.latitude
-            lng = avail.lng if avail and avail.lng else hub.address.longitude
-            if shift.remaining_hours >= 0.5 and (avail and avail.available or not avail):
-                available_drivers.append(d)
+        for d in available_drivers:
+            DriverShift.get_or_create_today(d)
 
-        logger.info(f"FINAL AVAILABLE DRIVERS: {len(available_drivers)}")
+        logger.info(f"  Available drivers: {len(available_drivers)}")
+
+        if not available_drivers and not pickups and not deliveries:
+            continue
 
         # ------------------------------------------------------------------
-        # HELPER: Process a leg (pickup/delivery) for a bucket
-        # - Filters by hub distance
-        # - Sorts by priority (already in QS, but reinforce)
-        # - Infers time windows based on tier + created_at
+        # 6. Process buckets (same_day → next_day → three_day)
         # ------------------------------------------------------------------
-        def process_leg(bookings, leg_type, addr_field, bucket):
-            if not bookings:
-                return
+        buckets = ['same_day', 'next_day', 'three_day']
+        legs = [
+            ('pickup', pickups, 'pickup_address'),
+            ('delivery', deliveries, 'dropoff_address')
+        ]
 
-            logger.info(f"Processing {leg_type} leg ({bucket}): {len(bookings)} bookings")
+        for bucket in buckets:
+            for leg_type, bookings_list, addr_field in legs:
+                bucket_bookings = [b for b in bookings_list if b.service_bucket == bucket]
+                if not bucket_bookings:
+                    continue
 
-            # Build locations: [hub, booking1, booking2, ...]
-            hub = Hub.objects.first()
-            if not hub or not hub.address.latitude:
-                logger.error("Hub missing or no coordinates")
-                return
+                logger.info(f"  → Optimizing {leg_type.upper()} | {bucket} | {len(bucket_bookings)} bookings")
 
-            locations = [hub.address] + [getattr(b, addr_field) for b in bookings]
-            time_matrix, distance_matrix = get_time_matrix(locations)
+                locations = [hub.address] + [getattr(b, addr_field) for b in bucket_bookings]
+                time_matrix, distance_matrix = get_time_matrix(locations)
 
-            # Time windows: optional
-            time_windows = None
-            if leg_type == 'pickup':
-                time_windows = [(b.scheduled_pickup_at, b.scheduled_pickup_at + timedelta(hours=4)) for b in bookings]
-            elif leg_type == 'delivery':
-                time_windows = [(b.scheduled_dropoff_at - timedelta(hours=4), b.scheduled_dropoff_at) for b in bookings]
+                # Optional time windows
+                time_windows = None
+                if leg_type == 'pickup' and bucket_bookings[0].scheduled_pickup_at:
+                    time_windows = [(b.scheduled_pickup_at, b.scheduled_pickup_at + timedelta(hours=4)) for b in bucket_bookings]
+                elif leg_type == 'delivery' and bucket_bookings[0].scheduled_dropoff_at:
+                    time_windows = [(b.scheduled_dropoff_at - timedelta(hours=4), b.scheduled_dropoff_at) for b in bucket_bookings]
 
-            
-            # Available drivers: filter via DriverAvailability (reverse OneToOne)
-            # today = timezone.now().date()
-            available_availabilities = DriverAvailability.objects.filter(
-                # date=today,
-                available=True,
-                driver_profile__user__is_active=True
-            ).select_related('driver_profile')
-
-            available_drivers = []
-            for avail in available_availabilities:
-                driver = avail.driver_profile
-                # This is now 100% safe — creates or returns existing shift
-                DriverShift.get_or_create_today(driver)
-                available_drivers.append(driver)
-
-            logger.info(f"FINAL AVAILABLE DRIVERS: {len(available_drivers)}")
-
-            routes = optimize_routes(
-                bookings, hub.address.latitude, hub.address.longitude,
-                time_matrix, distance_matrix, available_drivers,
-                time_windows, leg_type
-            )
-
-            for ordered, hrs, km, driver, etas in routes:
-                ordered_stops = [
-                    {
-                        'booking_id': str(b.id),
-                        'address': {
-                            'lat': float(getattr(b, addr_field).latitude),
-                            'lng': float(getattr(b, addr_field).longitude)
-                        },
-                        'eta': eta.isoformat()
-                    } for b, eta in zip(ordered, etas)
-                ]
-
-                route = Route.objects.create(
-                    driver=driver,
-                    leg_type=leg_type,
-                    ordered_stops=ordered_stops,
-                    total_time_hours=hrs,
-                    total_distance_km=km,
-                    status='assigned' if driver else 'pending'
+                routes = optimize_routes(
+                    bookings=bucket_bookings,
+                    hub_lat=hub.address.latitude,
+                    hub_lng=hub.address.longitude,
+                    time_matrix=time_matrix,
+                    distance_matrix=distance_matrix,
+                    drivers=available_drivers.copy(),  # copy so we don't exhaust the list across buckets
+                    time_windows=time_windows,
+                    leg_type=leg_type
                 )
-                route.bookings.set(ordered)
 
-                if driver:
-                    shift = DriverShift.get_or_create_today(driver)  # ← ALWAYS USE THIS
-                    current = shift.current_load or {'hours': 0.0, 'weight': 0.0, 'volume': 0.0}
-                    shift.current_load = {
-                        'hours': float(current.get('hours', 0)) + hrs,
-                        'weight': float(current.get('weight', 0)) + sum(float(b.quote.weight_kg) for b in ordered),
-                        'volume': float(current.get('volume', 0)) + sum(float(b.quote.volume_m3) for b in ordered),
-                    }
-                    shift.save()
+                for ordered, hrs, km, driver, etas in routes:
+                    if not ordered:
+                        continue
 
-        # Process all buckets/legs (prioritize same_day first implicitly by order)
-        process_leg(same_day_pickups, 'pickup', 'pickup_address', 'same_day')
-        process_leg(same_day_deliveries, 'delivery', 'dropoff_address', 'same_day')
-        process_leg(next_day_pickups, 'pickup', 'pickup_address', 'next_day')
-        process_leg(next_day_deliveries, 'delivery', 'dropoff_address', 'next_day')
-        process_leg(three_day_pickups, 'pickup', 'pickup_address', 'three_day')
-        process_leg(three_day_deliveries, 'delivery', 'dropoff_address', 'three_day')
+                    hrs = float(hrs)
+                    km = float(km)
 
-    logger.info("Optimization complete")
+                    # Build ordered_stops early — used in both cases
+                    ordered_stops = [
+                        {
+                            'booking_id': str(b.id),
+                            'address': {
+                                'lat': float(getattr(b, addr_field).latitude),
+                                'lng': float(getattr(b, addr_field).longitude)
+                            },
+                            'eta': eta.isoformat() if eta else None
+                        }
+                        for b, eta in zip(ordered, etas)
+                    ]
+
+                    with transaction.atomic():
+                        if not driver:
+                            # ———————————————————————————————
+                            # CASE 1: No driver available → Create PENDING shift & route
+                            # ———————————————————————————————
+                            pending_shift = DriverShift.objects.create(
+                                driver=None,  # Explicitly null
+                                start_time=now.replace(hour=8, minute=0, second=0, microsecond=0),  # Or your logic
+                                end_time=now.replace(hour=18, minute=0, second=0, microsecond=0),
+                                status=DriverShift.Status.PENDING,
+                                current_load={'weight': 0.0, 'volume': 0.0, 'hours': 0.0},
+                            )
+
+                            route = Route.objects.create(
+                                driver=None,
+                                shift=pending_shift,
+                                leg_type=leg_type,
+                                ordered_stops=ordered_stops,
+                                total_time_hours=round(hrs, 3),
+                                total_distance_km=round(km, 3),
+                                status='pending',
+                                visible_at=now,
+                            )
+                            route.bookings.set(ordered)
+
+                            # Keep bookings in SCHEDULED state until a driver is assigned
+                            Booking.objects.filter(id__in=[b.id for b in ordered]).update(
+                                hub=hub,
+                                driver=None,
+                                status=BookingStatus.SCHEDULED,
+                                updated_at=now
+                            )
+
+                            logger.info(
+                                f"PENDING ROUTE CREATED | Hub: {hub.name} | Driver: Unassigned "
+                                f"| {leg_type.upper()} | {bucket.upper()} | {len(ordered)} stops | {hrs:.2f}h | {km:.1f}km "
+                                f"| Shift: {pending_shift.id}"
+                            )
+                            continue  # Skip to next route
+
+                        # ———————————————————————————————
+                        # CASE 2: Driver found → Apply rules & assign
+                        # ———————————————————————————————
+                        shift = DriverShift.get_or_create_today(driver)
+
+                        # ——— 10-hour daily limit check ———
+                        current_hours = (shift.current_load or {}).get('hours', 0.0)
+                        projected_hours = current_hours + hrs
+
+                        if projected_hours > 10.0:
+                            logger.info(
+                                f"Skipping route – {driver.user.get_full_name()} would exceed 10h limit "
+                                f"({projected_hours:.1f}h > 10.0h)"
+                            )
+                            continue
+
+                        # ——— Minimum 8h route rule for non-same-day ———
+                        if bucket != 'same_day' and hrs < DriverShift.MIN_ROUTE_HOURS:
+                            logger.info(
+                                f"Skipping small non-same_day route for {driver.user.get_full_name()} "
+                                f"({hrs:.1f}h < {DriverShift.MIN_ROUTE_HOURS}h minimum)"
+                            )
+                            continue
+
+                        # ——— All checks passed → Assign route ———
+                        shift.status = DriverShift.Status.ASSIGNED
+                        shift.current_load['hours'] = round(projected_hours, 2)
+                        shift.save(update_fields=['status', 'current_load'])
+
+                        route = Route.objects.create(
+                            driver=driver,
+                            shift=shift,
+                            leg_type=leg_type,
+                            ordered_stops=ordered_stops,
+                            total_time_hours=round(hrs, 3),
+                            total_distance_km=round(km, 3),
+                            status='assigned',
+                            visible_at=now,
+                        )
+                        route.bookings.set(ordered)
+
+                        # Assign driver + hub + status to all bookings
+                        Booking.objects.filter(id__in=[b.id for b in ordered]).update(
+                            hub=hub,
+                            driver=driver,
+                            status=BookingStatus.ASSIGNED,
+                            updated_at=now
+                        )
+
+                        logger.info(
+                            f"ROUTE ASSIGNED | Hub: {hub.name} | Driver: {driver.user.get_full_name()} "
+                            f"| {leg_type.upper()} | {bucket.upper()} | {len(ordered)} stops | {hrs:.2f}h (+{current_hours:.1f}h → {projected_hours:.1f}h) | {km:.1f}km "
+                            f"| Shift: {shift.id} → {shift.status}"
+                        )
+
+    logger.info("Route optimization completed successfully")
 
 @shared_task
 def send_route_email(route_id):
@@ -372,3 +415,17 @@ def send_route_email(route_id):
     subject = f"Your Shift for {route.shift.start_time.date()}: Route Details"
     message = f"Route ID: {route.id}\nLeg: {route.leg_type}\nStops: {len(route.ordered_stops)}\nHours: {route.total_time_hours}\nDistance: {route.total_distance_km} km\nStatus: {route.status}"
     send_mail(subject, message, settings.DEFAULT_FROM_EMAIL, [driver_email])
+
+
+# Run a daily/ hourly beat task to mark overdue shifts
+@shared_task
+def mark_overdue_shifts():
+    now = timezone.now()
+    overdue_shifts = DriverShift.objects.filter(
+        end_time__lt=now,
+        status__in=[DriverShift.Status.ASSIGNED, DriverShift.Status.ACTIVE]
+    )
+    for shift in overdue_shifts:
+        shift.status = DriverShift.Status.OVERDUE
+        shift.save()
+    logger.info(f"Marked {overdue_shifts.count()} shifts as overdue")
