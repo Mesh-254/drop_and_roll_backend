@@ -13,4 +13,8 @@ app.conf.beat_schedule = {
         'task': 'bookings.tasks.optimize_bookings',
         'schedule': crontab(minute='*/1'),  # Every 15 minutes
     },
+    'mark-overdue-shifts': {
+        'task': 'bookings.tasks.mark_overdue_shifts',
+        'schedule': crontab(minute=0, hour=0),  # Daily at midnight
+    },
 }
