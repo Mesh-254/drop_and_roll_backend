@@ -22,7 +22,7 @@ from django.db.models import Case, When, IntegerField
 from bookings.models import Booking, BookingStatus, Route
 from bookings.serializers import BookingSerializer
 from driver.models import (
-    DriverAvailability, DriverPayout, DriverRating, DriverDocument, DriverShift
+    DriverAvailability, DriverPayout, DriverRating, DriverDocument, DriverShift, DriverProfile,
 )
 from driver.serializers import (
     DriverAvailabilitySerializer,
@@ -336,6 +336,30 @@ class DriverShiftViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = DriverShiftSerializer  # New serializer
     def get_queryset(self):
         return DriverShift.objects.filter(driver=self.request.user.driver_profile, start_time__date=timezone.now().date())
+    
+    @action(detail=True, methods=['post'], permission_classes=[IsAdminUser])
+    def assign_driver(self, request, pk=None):
+        shift = self.get_object()
+        if shift.status != DriverShift.Status.PENDING:
+            return Response({"error": "Shift not pending"}, status=400)
+        
+        driver_id = request.data.get('driver_id')
+        try:
+            driver = DriverProfile.objects.get(id=driver_id)
+            if DriverShift.objects.filter(driver=driver, status__in=[DriverShift.Status.ASSIGNED, DriverShift.Status.ACTIVE]).exists():
+                return Response({"error": "Driver has open shift"}, status=400)
+            
+            shift.driver = driver
+            shift.status = DriverShift.Status.ASSIGNED
+            shift.save()
+            
+            # Update associated routes/bookings
+            Route.objects.filter(shift=shift).update(driver=driver)
+            Booking.objects.filter(route__shift=shift).update(driver=driver, status=BookingStatus.ASSIGNED)
+            
+            return Response(DriverShiftSerializer(shift).data)
+        except DriverProfile.DoesNotExist:
+            return Response({"error": "Driver not found"}, status=404)
 
 class DriverMetricsView(APIView):
     permission_classes = [IsDriver]
