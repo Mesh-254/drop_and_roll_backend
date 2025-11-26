@@ -1,7 +1,8 @@
 from decimal import Decimal
 
 from drf_yasg import openapi  # type: ignore
-from drf_yasg.utils import swagger_auto_schema  # type: ignore
+from drf_yasg.utils import swagger_auto_schema
+from driver.models import DriverProfile, DriverShift  # type: ignore
 from .tasks import optimize_bookings, send_booking_confirmation_email
 from rest_framework import viewsets, status  # type: ignore
 from rest_framework.decorators import action, api_view, permission_classes  # type: ignore
@@ -585,3 +586,61 @@ class RouteViewSet(viewsets.ModelViewSet):
     def optimize_now(self, request):
         optimize_bookings.delay()  # Trigger manually
         return Response({'status': 'Optimization queued'})
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAdminOrReadOnly])
+    def assign_driver(self, request, pk=None):
+        route = self.get_object()
+
+        if route.status != 'pending':
+            return Response({"error": "Only pending routes can be assigned"}, status=400)
+
+        driver_id = request.data.get('driver_id')
+        if not driver_id:
+            return Response({"error": "driver_id is required"}, status=400)
+
+        try:
+            driver = DriverProfile.objects.get(id=driver_id)
+        except DriverProfile.DoesNotExist:
+            return Response({"error": "Driver not found"}, status=404)
+
+        with transaction.atomic():
+            # 1. Assign driver to route
+            route.driver = driver
+            route.status = 'assigned'
+            route.visible_at = timezone.now()
+            route.save(update_fields=['driver', 'status', 'visible_at'])
+
+            # 2. Handle shift: if pending → assign to driver
+            if route.shift and not route.shift.driver:
+                route.shift.driver = driver
+                route.shift.status = DriverShift.Status.ASSIGNED
+
+                # Update shift load based on route hours
+                if 'hours' not in route.shift.current_load:
+                    route.shift.current_load = {"weight": 0.0, "volume": 0.0, "hours": 0.0}
+
+                route.shift.current_load['hours'] = round(
+                    route.shift.current_load['hours'] + route.total_time_hours, 2
+                )
+                route.shift.save(update_fields=['driver', 'status', 'current_load'])
+
+            # 3. Update ALL bookings in the route
+            updated = route.bookings.update(
+                driver=driver,
+                status=BookingStatus.ASSIGNED,
+                hub=driver.hub,  # Use driver.hub since shift has no hub
+                updated_at=timezone.now()
+            )
+
+            logger.info(
+                f"Admin manually assigned Route {route.id} to Driver {driver.user.get_full_name()} "
+                f"({driver.user.email}). Updated {updated} bookings."
+            )
+
+        return Response({
+            "success": True,
+            "route_id": str(route.id),
+            "driver": driver.user.get_full_name(),
+            "bookings_updated": updated,
+            "shift_assigned": route.shift.driver_id is not None if route.shift else False
+        })
