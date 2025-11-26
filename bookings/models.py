@@ -9,8 +9,6 @@ from django.db import models
 from django.utils import timezone
 import uuid
 
-from driver.models import DriverProfile
-
 
 class Hub(models.Model):
     name = models.CharField(max_length=100)
@@ -168,14 +166,14 @@ class Booking(models.Model):
     guest_email = models.CharField(max_length=255, blank=True, null=True, validators=[
                                    EmailValidator()], db_index=True)
 
-    driver = models.ForeignKey(DriverProfile, on_delete=models.SET_NULL, null=True, blank=True,
+    driver = models.ForeignKey('driver.DriverProfile', on_delete=models.SET_NULL, null=True, blank=True,
                                related_name="bookings")
     hub = models.ForeignKey(
         'Hub',
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='bookings_at_hub',
+        related_name='hub_bookings',
         help_text="Hub where the booking is currently located (set when status='at_hub')."
     )
 
@@ -327,7 +325,7 @@ class BulkUpload(models.Model):
 
 class Route(models.Model):
     driver = models.ForeignKey(
-        DriverProfile, on_delete=models.SET_NULL, null=True)
+        'driver.DriverProfile', on_delete=models.SET_NULL, null=True)
     bookings = models.ManyToManyField(Booking)  # Grouped bookings
 
     shift = models.ForeignKey('driver.DriverShift', on_delete=models.SET_NULL, null=True, related_name='routes')
@@ -341,6 +339,10 @@ class Route(models.Model):
     total_distance_km = models.FloatField(default=0.0)
     status = models.CharField(choices=[('pending', 'Pending'), (
         'assigned', 'Assigned'), ('completed', 'Completed')], default='pending')
+    
+    # Add index for fast lookups
+    class Meta:
+        indexes = [models.Index(fields=["driver", "status"])]
 
 
 # ADD Proof of delivery
