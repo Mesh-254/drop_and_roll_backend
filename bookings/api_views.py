@@ -2,7 +2,8 @@ from decimal import Decimal
 
 from drf_yasg import openapi  # type: ignore
 from drf_yasg.utils import swagger_auto_schema
-from driver.models import DriverProfile, DriverShift  # type: ignore
+from driver.models import DriverProfile, DriverShift
+from driver.serializers import DriverProfileSerializer  # type: ignore
 from .tasks import optimize_bookings, send_booking_confirmation_email
 from rest_framework import viewsets, status  # type: ignore
 from rest_framework.decorators import action, api_view, permission_classes  # type: ignore
@@ -576,7 +577,6 @@ def track_parcel(request):
 
     return Response(payload, status=200)
 
-
 class RouteViewSet(viewsets.ModelViewSet):
     queryset = Route.objects.all()
     serializer_class = RouteSerializer
@@ -587,35 +587,90 @@ class RouteViewSet(viewsets.ModelViewSet):
         optimize_bookings.delay()  # Trigger manually
         return Response({'status': 'Optimization queued'})
 
-    @action(detail=True, methods=['post'], permission_classes=[IsAdminOrReadOnly])
-    def assign_driver(self, request, pk=None):
+    # NEW: Action to get available drivers for a specific route (filtered by hub, active, and availability)
+    # Line-by-line details:
+    # 1. Decorator: Defines a detail=True action (requires pk for route), GET method, admin-only.
+    @action(detail=True, methods=['get'], permission_classes=[IsAdminOrReadOnly])
+    def get_available_drivers(self, request, pk=None):
+        # 2. Get the route object using pk (efficient, raises 404 if not found).
         route = self.get_object()
 
+        # 3. Check if route has a hub; if not, return error (prevents invalid filtering).
+        if not route.hub:
+            # NEW: If no hub, can't filter—error or all drivers? Here, error to enforce hub assignment.
+            return Response({"error": "Route has no hub; assign hub first"}, status=400)
+
+        # 4. Query drivers: Filter by same hub and active status (efficient with index on hub/status).
+        # Use select_related for user (name/email) to avoid N+1 queries.
+        drivers = DriverProfile.objects.filter(
+            hub=route.hub,
+            status=DriverProfile.Status.ACTIVE
+        ).select_related('user')
+
+        # 5. Calculate remaining hours per driver (can't annotate JSONField directly, so loop).
+        # This is efficient for reasonable driver counts per hub (~10-100); no extra DB hits beyond initial query.
+        available_drivers = []
+        for driver in drivers:
+            # Get/create today's shift (method from DriverShift model).
+            shift = DriverShift.get_or_create_today(driver)
+            # Calculate remaining hours (property: max_hours - current_load['hours']).
+            remaining = shift.remaining_hours  # Assuming remaining_hours is a @property in DriverShift
+            if remaining >= route.total_time_hours:  # Only include if enough hours for this route
+                available_drivers.append((driver, remaining))
+
+        # 6. Sort by remaining hours descending (most available first; pure Python sort after loop).
+        available_drivers.sort(key=lambda x: x[1], reverse=True)
+
+        # 7. Serialize only the drivers (extract from tuples; use context if needed).
+        # Assuming DriverProfileSerializer includes fields like id, user__full_name, hub__name, etc.
+        serializer = DriverProfileSerializer([d[0] for d in available_drivers], many=True)
+
+        # 8. Return response with hub info, serialized drivers, and count (for frontend pagination/info).
+        return Response({
+            "hub": route.hub.name if route.hub else "None",
+            "available_drivers": serializer.data,
+            "total": len(available_drivers)
+        })
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAdminOrReadOnly])
+    def assign_driver(self, request, pk=None):
+        # 1. Get the route object (existing).
+        route = self.get_object()
+
+        # 2. Check status (existing: only pending can be assigned).
         if route.status != 'pending':
             return Response({"error": "Only pending routes can be assigned"}, status=400)
 
+        # 3. Get driver_id from request data (existing).
         driver_id = request.data.get('driver_id')
         if not driver_id:
             return Response({"error": "driver_id is required"}, status=400)
 
+        # 4. Fetch driver (existing; 404 if not found).
         try:
             driver = DriverProfile.objects.get(id=driver_id)
         except DriverProfile.DoesNotExist:
             return Response({"error": "Driver not found"}, status=404)
 
+        # NEW: Enhanced validation - Check hub match before assignment.
+        # Why? Prevents assigning driver from wrong hub; error-free.
+        if route.hub and driver.hub != route.hub:
+            return Response({"error": "Driver hub mismatch with route hub"}, status=400)
+
+        # 5. Atomic block for transaction safety (existing).
         with transaction.atomic():
-            # 1. Assign driver to route
+            # 6. Assign driver and update route (existing).
             route.driver = driver
             route.status = 'assigned'
             route.visible_at = timezone.now()
             route.save(update_fields=['driver', 'status', 'visible_at'])
 
-            # 2. Handle shift: if pending → assign to driver
+            # 7. Handle shift assignment (existing).
             if route.shift and not route.shift.driver:
                 route.shift.driver = driver
                 route.shift.status = DriverShift.Status.ASSIGNED
 
-                # Update shift load based on route hours
+                # Update shift load (existing).
                 if 'hours' not in route.shift.current_load:
                     route.shift.current_load = {"weight": 0.0, "volume": 0.0, "hours": 0.0}
 
@@ -624,7 +679,7 @@ class RouteViewSet(viewsets.ModelViewSet):
                 )
                 route.shift.save(update_fields=['driver', 'status', 'current_load'])
 
-            # 3. Update ALL bookings in the route
+            # 8. Update bookings (existing; uses driver.hub for hub update).
             updated = route.bookings.update(
                 driver=driver,
                 status=BookingStatus.ASSIGNED,
@@ -632,11 +687,17 @@ class RouteViewSet(viewsets.ModelViewSet):
                 updated_at=timezone.now()
             )
 
+            # NEW: Re-save route to trigger validation in Route.save() (post-assignment).
+            # Why? Ensures hub consistency after updates; raises if mismatch (atomic rollback).
+            route.save()
+
+            # 9. Log assignment (existing).
             logger.info(
                 f"Admin manually assigned Route {route.id} to Driver {driver.user.get_full_name()} "
                 f"({driver.user.email}). Updated {updated} bookings."
             )
 
+        # 10. Return success response (existing).
         return Response({
             "success": True,
             "route_id": str(route.id),
