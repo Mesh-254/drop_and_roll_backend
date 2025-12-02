@@ -55,8 +55,9 @@ class DriverProfile(models.Model):
             DriverShift.get_or_create_today(self)
 
     def __str__(self):
-            return f"DriverProfile({self.user.email}, {self.user.role})"
-    
+        hub_str = f" [{self.hub.name}]" if self.hub else " [No Hub]"
+        return f"{self.user.get_full_name()}:{self.user.email} - {self.user.role} {hub_str}"
+
 
 class DriverShift(models.Model):
     """
