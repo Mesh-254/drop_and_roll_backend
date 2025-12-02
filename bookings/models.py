@@ -4,16 +4,50 @@ from decimal import Decimal
 
 from django.db import models
 from django.conf import settings
-from django.core.validators import MinValueValidator, EmailValidator, RegexValidator
+from django.core.validators import MinValueValidator, EmailValidator, RegexValidator, ValidationError
 from django.db import models
 from django.utils import timezone
 import uuid
+from django.db.models import Count
+import logging
 
+
+logger = logging.getLogger(__name__)
 
 class Hub(models.Model):
     name = models.CharField(max_length=100)
     address = models.OneToOneField(
         'Address', on_delete=models.PROTECT, related_name='hub')
+    
+    class Meta:
+        # Add index for tallies
+        indexes = [models.Index(fields=['name'])]  # filtering by name
+    
+    def get_active_bookings_count(self):
+        """
+        Count 'active' bookings for logistics: SCHEDULED, ASSIGNED, PICKED_UP, AT_HUB, IN_TRANSIT.
+        Excludes DELIVERED, CANCELLED, FAILED.
+        """
+        active_statuses = [
+            BookingStatus.SCHEDULED, BookingStatus.ASSIGNED, 
+            BookingStatus.PICKED_UP, BookingStatus.AT_HUB, BookingStatus.IN_TRANSIT
+        ]
+        return self.hub_bookings.filter(status__in=active_statuses).count()  # Assuming related_name='bookings' or adjust
+
+    def get_completed_bookings_count(self):
+        """
+        Count completed (DELIVERED) bookings for performance tracking.
+        """
+        return self.hub_bookings.filter(status=BookingStatus.DELIVERED).count()
+
+    # NEW: Get routes count for this hub (for dashboard)
+    def get_routes_count(self):
+        return self.routes.count()
+    
+    # NEW: Get assigned drivers count (active only)
+    def get_assigned_drivers_count(self):
+        return self.drivers.filter(status='active').count()
+        
 
     def __str__(self):
         return self.name
@@ -340,10 +374,75 @@ class Route(models.Model):
     status = models.CharField(choices=[('pending', 'Pending'), (
         'assigned', 'Assigned'), ('completed', 'Completed')], default='pending')
     
+    hub = models.ForeignKey('Hub', on_delete=models.SET_NULL, null=True, blank=True, related_name='routes')
+    
     # Add index for fast lookups
     class Meta:
-        indexes = [models.Index(fields=["driver", "status"])]
+        indexes = [
+            models.Index(fields=["driver", "status"]),
+            # NEW: Index for fast lookups by hub and status (e.g., pending routes per hub)
+            models.Index(fields=["hub", "status"]),
+            ]
+    
+    def __str__(self):
+        hub_str = f" at {self.hub.name}" if self.hub else ""
+        driver_str = f" by {self.driver.user.get_full_name()}" if self.driver else " (Pending)"
+        return f"Route {self.id} - {self.leg_type.capitalize()} ({self.status}){hub_str}{driver_str}"
+    
+    def save(self, *args, **kwargs):
+        """
+        Hybrid def save(self, *args, **kwargs):
+        Enhanced save method to ensure hub is populated when possible.
+        - If hub not set, attempt to infer from driver (if assigned) or bookings (if linked).
+        - Always validate hub uniformity across bookings if they exist.
+        - Logs warnings if hub cannot be inferred but proceeds (since null=True).
+        - Raises ValidationError on inconsistent hubs in bookings.
+        Efficiency: Uses aggregated queries for inference/validation to minimize DB hits.
+        """
+        # Pre-save inference: Attempt to set hub if not provided
+        if not self.hub:
+            if self.driver and self.driver.hub:
+                self.hub = self.driver.hub
+                logger.debug(f"Inferred hub from driver for Route {self.id or 'new'}: {self.hub.name}")
 
+        # Initial save to get PK if new (required for M2M)
+        super().save(*args, **kwargs)
+
+        # Post-save: Handle bookings-based inference/validation if bookings exist
+        if self.bookings.exists():
+            # Aggregate hub counts from linked bookings
+            hub_counts = self.bookings.values('hub').annotate(
+                count=Count('hub')
+            ).order_by('-count')
+
+            if not hub_counts:
+                return  # No bookings (edge case)
+
+            distinct_hubs = hub_counts.count()
+            if distinct_hubs > 1:
+                raise ValidationError(
+                    f"Route {self.id} bookings have {distinct_hubs} different hubs. All bookings must share the same hub."
+                )
+
+            common_hub_id = hub_counts.first()['hub']
+            if not self.hub:
+                # Infer if still not set
+                if common_hub_id:
+                    self.hub_id = common_hub_id
+                    super().save(update_fields=['hub'])
+                    logger.info(f"Inferred hub from bookings for Route {self.id}: {self.hub.name}")
+                else:
+                    logger.warning(f"Route {self.id} has bookings but no common hub (all None). Hub remains unset.")
+            elif self.hub_id != common_hub_id:
+                raise ValidationError(
+                    f"Route {self.id} hub mismatch: Explicitly set hub {self.hub_id} does not match inferred {common_hub_id} from bookings."
+                )
+            # If match or inferred, all good
+
+        else:
+            # No bookings: Warn if hub still unset (but allow, as per null=True)
+            if not self.hub:
+                logger.warning(f"Route {self.id} saved without hub, driver, or bookings. Hub remains unset.")
 
 # ADD Proof of delivery
 class ProofOfDelivery(models.Model):
