@@ -55,8 +55,9 @@ class DriverProfileSerializer(serializers.ModelSerializer):
             "license_number",
             "vehicle_type",
             "vehicle_registration",
-            "is_verified",
+            "hub",
             "status",
+            "is_verified",
             "total_deliveries",
             "rating",
         ]
