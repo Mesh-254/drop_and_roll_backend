@@ -1,9 +1,9 @@
 import json
 from datetime import timedelta
-from django.db.models import Sum, Count, Avg
+from django.db.models import Sum, Count, Avg, Q
 from django.utils import timezone
 from django.contrib.auth import get_user_model
-from bookings.models import Booking, Quote, ServiceType, ShippingType, RecurringSchedule, BulkUpload, Address, Route, Hub
+from bookings.models import Booking, Quote, ServiceType, ShippingType, RecurringSchedule, BulkUpload, Address, Route, Hub, BookingStatus
 from driver.models import DriverProfile, DriverPayout, DriverRating, DriverInvitation
 from payments.models import PaymentTransaction, Refund, Wallet
 from support.models import Ticket, TicketStatus
@@ -116,7 +116,54 @@ def dashboard_callback(request, context):
         'status').annotate(count=Count('id'))
     route_status_counts = {item['status']: item['count']
                            for item in routes_by_status}
+    # NEW: Hub KPIs (total hubs, total active/completed across hubs)
     total_hubs = Hub.objects.count()
+    total_active_bookings = Booking.objects.filter(
+        status__in=[BookingStatus.SCHEDULED, BookingStatus.ASSIGNED, 
+                    BookingStatus.PICKED_UP, BookingStatus.AT_HUB, BookingStatus.IN_TRANSIT]
+    ).count()
+    total_completed_bookings = Booking.objects.filter(status=BookingStatus.DELIVERED).count()
+
+    # NEW: Enhanced hub metrics table data (with routes and drivers)
+    hub_metrics = Hub.objects.annotate(
+        active_bookings=Count('hub_bookings', filter=Q(hub_bookings__status__in=[
+            BookingStatus.SCHEDULED, BookingStatus.ASSIGNED, 
+            BookingStatus.PICKED_UP, BookingStatus.AT_HUB, BookingStatus.IN_TRANSIT
+        ])),
+        completed_bookings=Count('hub_bookings', filter=Q(hub_bookings__status=BookingStatus.DELIVERED)),
+        routes_count=Count('routes'),
+        active_drivers=Count('drivers', filter=Q(drivers__status='active'))
+    ).values('name', 'active_bookings', 'completed_bookings', 'routes_count', 'active_drivers')
+
+    # NEW: Hub chart (bar chart for active/completed per hub)
+    hub_labels = [item['name'] for item in hub_metrics]
+    active_data = [item['active_bookings'] for item in hub_metrics]
+    completed_data = [item['completed_bookings'] for item in hub_metrics]
+    hub_chart_data = json.dumps({
+        'labels': hub_labels,
+        'datasets': [
+            {'label': 'Active Bookings', 'data': active_data, 'backgroundColor': '#3b82f6'},
+            {'label': 'Completed Bookings', 'data': completed_data, 'backgroundColor': '#10b981'},
+        ]
+    })
+
+    # NEW: Pending routes overview (to help assignment) - List pending routes with hub and suggested drivers
+    pending_routes = Route.objects.filter(status='pending').select_related('hub').annotate(
+        bookings_count=Count('bookings')
+    ).values('id', 'hub__name', 'leg_type', 'total_time_hours', 'bookings_count')
+    
+    pending_routes_with_suggestions = []
+    for pr in pending_routes:
+        if pr['hub__name']:
+            # Suggest top 3 available drivers from same hub (similar to API logic)
+            suggested_drivers = DriverProfile.objects.filter(
+                hub__name=pr['hub__name'],
+                status='active'
+            ).select_related('user')[:3].values('user__full_name')
+            suggested_drivers = list(suggested_drivers)
+        pr['suggested_drivers'] = suggested_drivers
+        pending_routes_with_suggestions.append(pr)
+
     total_assigned_jobs = Booking.objects.filter(status='assigned').count()
     drivers_with_jobs = DriverProfile.objects.annotate(job_count=Count(
         'bookings')).filter(job_count__gt=0).count()  # FIXED HERE
@@ -317,7 +364,14 @@ def dashboard_callback(request, context):
         # Route/Hub/Driver KPIs
         'total_routes': total_routes,
         'route_status_counts': route_status_counts,
+
         'total_hubs': total_hubs,
+        'total_active_bookings': total_active_bookings,
+        'total_completed_bookings': total_completed_bookings,
+        'hub_metrics': list(hub_metrics),  # For table display
+        'hub_chart_data': hub_chart_data,  # For bar chart
+        'pending_routes_with_suggestions': pending_routes_with_suggestions,  # Table for assignment help
+
         'total_assigned_jobs': total_assigned_jobs,
         'drivers_with_jobs': drivers_with_jobs,
         'recent_routes_table': recent_routes_table,
