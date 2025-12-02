@@ -48,9 +48,9 @@ class QuoteAdmin(ModelAdmin):
 
 @admin.register(Booking)
 class BookingAdmin(ModelAdmin):
-    list_display = ("tracking_number","get_customer_name", "get_service_type_name", "get_driver_name",
+    list_display = ("tracking_number","get_customer_name", "get_hub", "get_driver_name",
                     "status_badge", "final_price", "created_at", "pod_link", "refund_link")
-    list_filter = ("status", "quote__service_type__name", "created_at")
+    list_filter = ("status", "quote__service_type__name", "created_at", "hub__name")
     search_fields = ("id", "customer__email",
                      "customer__full_name", "guest_email")
     readonly_fields = ("created_at", "updated_at")
@@ -68,6 +68,21 @@ class BookingAdmin(ModelAdmin):
     def get_driver_name(self, obj):
         return obj.driver.user.full_name if obj.driver and obj.driver.user else "Unassigned"
     get_driver_name.short_description = "Driver"
+
+    # ------------------------------------------------------------------
+    # Fixed get_hub – uses the real `hub` field (not route)
+    # ------------------------------------------------------------------
+    def get_hub(self, obj):
+        # Most bookings have a hub directly (assigned when route is created)
+        if obj.hub:
+            return obj.hub.name
+        # Fallback for very old bookings that might still have a route but no hub
+        if hasattr(obj, "route_set") and obj.route_set.exists():
+            first_route_hub = obj.route_set.first().hub
+            return first_route_hub.name if first_route_hub else "-"
+        return "Not assigned"
+    get_hub.short_description = "Hub"
+    get_hub.admin_order_field = "hub__name"   # ← enables sorting & filtering correctly
 
     def status_badge(self, obj):
         color = {
@@ -372,10 +387,9 @@ class BookingInline(admin.TabularInline):  # Show bookings in Route admin
     verbose_name = "Booking in Route"
     verbose_name_plural = "Bookings in Route"
     can_delete = False
-
 @admin.register(Route)
 class RouteAdmin(ModelAdmin):
-    list_display = ('id', 'driver_link', 'leg_type', 'status', 'total_time_hours', 'total_distance_km', 'booking_count')
+    list_display = ('id', 'hub', 'driver_link', 'leg_type', 'status', 'total_time_hours', 'total_distance_km', 'booking_count')  # Added 'hub'
     list_filter = ('leg_type', 'status', 'driver')
     search_fields = ('driver__user__full_name',)
     inlines = [BookingInline]  # View bookings per route
@@ -393,10 +407,13 @@ class RouteAdmin(ModelAdmin):
                 for route in queryset:
                     if route.driver:
                         continue  # Skip if already assigned
+                    if route.hub and route.hub != driver.hub:
+                        continue  # Skip hub mismatch
                     route.driver = driver
+                    route.hub = driver.hub if not route.hub else route.hub
                     route.status = 'assigned'
                     route.save()
-                    route.bookings.update(driver=driver, status='assigned')
+                    route.bookings.update(driver=driver, hub=route.hub, status='assigned')
                 self.message_user(request, "Drivers assigned successfully.", level=messages.SUCCESS)
             return HttpResponseRedirect(".")
 
@@ -417,10 +434,14 @@ class RouteAdmin(ModelAdmin):
             try:
                 driver = DriverProfile.objects.get(id=driver_id, status='active')
                 for route in queryset.filter(status='pending'):
+                    if route.hub and route.hub != driver.hub:
+                        self.message_user(request, f"Skipped route {route.id}: Hub mismatch with driver hub", level=messages.WARNING)
+                        continue
                     route.driver = driver
+                    route.hub = driver.hub if not route.hub else route.hub  # Set hub if not set
                     route.status = 'assigned'
                     route.save()
-                    route.bookings.update(driver=driver, status='assigned')
+                    route.bookings.update(driver=driver, hub=route.hub, status='assigned')
                 self.message_user(request, "Drivers assigned successfully.", level=messages.SUCCESS)
             except Exception as e:
                 self.message_user(request, f"Error: {e}", level=messages.ERROR)
@@ -442,30 +463,27 @@ class RouteAdmin(ModelAdmin):
         optimize_bookings.delay()
         self.message_user(request, "Re-optimization queued.")
 
+
 @admin.register(Hub)
 class HubAdmin(ModelAdmin):
-    list_display = ('name', 'address_display', 'booking_count')
-    search_fields = ('name', 'address__city')
+    list_display = ('name', 'get_active_bookings_count', 'get_completed_bookings_count',
+                    'get_routes_count', 'get_assigned_drivers_count')
+    search_fields = ('name',)
+    readonly_fields = ('get_active_bookings_count', 'get_completed_bookings_count',
+                       'get_routes_count', 'get_assigned_drivers_count')
 
-    def address_display(self, obj):
-        return str(obj.address)
-    address_display.short_description = "Address"
+    def get_active_bookings_count(self, obj):
+        return obj.hub_bookings.filter(status__in=['scheduled', 'assigned', 'picked_up', 'in_transit']).count()
+    get_active_bookings_count.short_description = "Active Bookings"
 
-    def booking_count(self, obj):
-        # Example: Count related bookings (customize as needed)
-        return Booking.objects.filter(pickup_address=obj.address).count() + Booking.objects.filter(dropoff_address=obj.address).count()
-    booking_count.short_description = "Related Bookings"
+    def get_completed_bookings_count(self, obj):
+        return obj.hub_bookings.filter(status__in=['delivered', 'failed']).count()
+    get_completed_bookings_count.short_description = "Completed"
 
-# In BookingAdmin: Add route link
-class BookingAdmin(ModelAdmin):  # Your existing
-    # ... existing fields
-    list_display = ("tracking_number", ..., "route_link")  # Add
+    def get_routes_count(self, obj):
+        return obj.routes.count()
+    get_routes_count.short_description = "Routes"
 
-    def route_link(self, obj):
-        routes = obj.route_set.all()  # Reverse M2M
-        if routes:
-            links = [format_html('<a href="{}">Route {}</a>', reverse('admin:bookings_route_change', args=(r.id,)), r.id) for r in routes]
-            return format_html(", ".join(links))
-        return "-"
-    route_link.short_description = "Route"
-    route_link.allow_tags = True
+    def get_assigned_drivers_count(self, obj):
+        return obj.drivers.filter(status='active').count()  # Fixed: Count stationed active drivers directly (not via routes)
+    get_assigned_drivers_count.short_description = "Assigned Drivers"
