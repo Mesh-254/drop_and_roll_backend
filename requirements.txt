@@ -29,7 +29,9 @@ google-auth==2.40.3
 google-auth-oauthlib==1.2.2
 idna==3.10
 inflection==0.5.1
+joblib==1.5.3
 kombu==5.5.4
+numpy==2.3.5
 oauthlib==3.3.1
 packaging==25.0
 pillow==11.3.0
@@ -49,12 +51,15 @@ redis==6.4.0
 requests==2.32.5
 requests-oauthlib==2.0.0
 rsa==4.9.1
+scikit-learn==1.8.0
+scipy==1.16.3
 shortuuid==1.0.13
 six==1.17.0
 social-auth-app-django==5.5.1
 social-auth-core==4.7.0
 sqlparse==0.5.3
 stripe==13.0.1
+threadpoolctl==3.6.0
 toposort==1.10
 typing_extensions==4.15.0
 tzdata==2025.2
