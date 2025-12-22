@@ -9,6 +9,7 @@ https://docs.djangoproject.com/en/5.2/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
+
 import os
 from datetime import timedelta
 from pathlib import Path
@@ -30,84 +31,81 @@ environ.Env.read_env(os.path.join(BASE_DIR, ".env"))
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = env('DJANGO_SECRET_KEY')
+SECRET_KEY = env("DJANGO_SECRET_KEY")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = config('DJANGO_DEBUG', cast=bool)
+DEBUG = config("DJANGO_DEBUG", cast=bool)
 
-ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS').split(',')
+ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS").split(",")
 
 # Application definition
 
 INSTALLED_APPS = [
-    'unfold',
-    'django.contrib.admin',
-    'django.contrib.auth',
-    'django.contrib.contenttypes',
-    'django.contrib.sessions',
-    'django.contrib.messages',
-    'django.contrib.staticfiles',
-    'drf_yasg',
-    'rest_framework',
-    'rest_framework_simplejwt',
-    'rest_framework_simplejwt.token_blacklist',
-    'django_seed',
-
-    'bookings.apps.BookingsConfig',
-    'users.apps.UsersConfig',
-    'tracking.apps.TrackingConfig',
-    'driver.apps.DriverConfig',
-    'payments.apps.PaymentsConfig',
-    'business.apps.BusinessConfig',
-    'support.apps.SupportConfig',
-
-    'celery',
-    'corsheaders',
-    'social_django',
-
+    "unfold",
+    "django.contrib.admin",
+    "django.contrib.auth",
+    "django.contrib.contenttypes",
+    "django.contrib.sessions",
+    "django.contrib.messages",
+    "django.contrib.staticfiles",
+    "drf_yasg",
+    "rest_framework",
+    "rest_framework_simplejwt",
+    "rest_framework_simplejwt.token_blacklist",
+    "django_seed",
+    "bookings.apps.BookingsConfig",
+    "users.apps.UsersConfig",
+    "tracking.apps.TrackingConfig",
+    "driver.apps.DriverConfig",
+    "payments.apps.PaymentsConfig",
+    "business.apps.BusinessConfig",
+    "support.apps.SupportConfig",
+    "celery",
+    "corsheaders",
+    "social_django",
 ]
 
 MIDDLEWARE = [
-    'django.middleware.security.SecurityMiddleware',
-    'django.contrib.sessions.middleware.SessionMiddleware',
-    'corsheaders.middleware.CorsMiddleware',
-    'django.middleware.common.CommonMiddleware',
-    'django.middleware.csrf.CsrfViewMiddleware',
-    'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'django.contrib.messages.middleware.MessageMiddleware',
-    'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    "django.middleware.security.SecurityMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
+    "django.middleware.common.CommonMiddleware",
+    "django.middleware.csrf.CsrfViewMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
-ROOT_URLCONF = 'Drop_N_Roll.urls'
+ROOT_URLCONF = "Drop_N_Roll.urls"
 
 TEMPLATES = [
     {
-        'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [BASE_DIR / 'templates'],
-        'APP_DIRS': True,
-        'OPTIONS': {
-            'context_processors': [
-                'django.template.context_processors.request',
-                'django.contrib.auth.context_processors.auth',
-                'django.contrib.messages.context_processors.messages',
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "DIRS": [BASE_DIR / "templates"],
+        "APP_DIRS": True,
+        "OPTIONS": {
+            "context_processors": [
+                "django.template.context_processors.request",
+                "django.contrib.auth.context_processors.auth",
+                "django.contrib.messages.context_processors.messages",
             ],
         },
     },
 ]
 
-WSGI_APPLICATION = 'Drop_N_Roll.wsgi.application'
+WSGI_APPLICATION = "Drop_N_Roll.wsgi.application"
 
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': env('POSTGRES_DB'),
-        'USER': env('POSTGRES_USER'),
-        'PASSWORD': env('POSTGRES_PASSWORD'),
-        'HOST': env('POSTGRES_HOST'),
-        'PORT': env('POSTGRES_PORT'),
+    "default": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": env("POSTGRES_DB"),
+        "USER": env("POSTGRES_USER"),
+        "PASSWORD": env("POSTGRES_PASSWORD"),
+        "HOST": env("POSTGRES_HOST"),
+        "PORT": env("POSTGRES_PORT"),
     }
 }
 
@@ -116,25 +114,25 @@ DATABASES = {
 
 AUTH_PASSWORD_VALIDATORS = [
     {
-        'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
+        "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator",
     },
     {
-        'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
+        "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
     },
     {
-        'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
+        "NAME": "django.contrib.auth.password_validation.CommonPasswordValidator",
     },
     {
-        'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
+        "NAME": "django.contrib.auth.password_validation.NumericPasswordValidator",
     },
 ]
 
 # Internationalization
 # https://docs.djangoproject.com/en/5.2/topics/i18n/
 
-LANGUAGE_CODE = 'en-us'
+LANGUAGE_CODE = "en-us"
 
-TIME_ZONE = 'UTC'
+TIME_ZONE = "UTC"
 
 USE_I18N = True
 
@@ -143,41 +141,40 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
-STATIC_URL = 'static/'
+STATIC_URL = "static/"
 # New: Directory for collected static files
-STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATIC_ROOT = BASE_DIR / "staticfiles"
 # STATICFILES_DIRS = [
 #     BASE_DIR / 'static',  # Optional: Directory for project-specific static files
 # ]
 
 # Media files (user-uploaded content)
-MEDIA_URL = '/media/'
-MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+MEDIA_URL = "/media/"
+MEDIA_ROOT = os.path.join(BASE_DIR, "media")
 
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
-DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 AUTH_USER_MODEL = "users.User"
 
 # Allow specific origins (e.g., your frontend)
 # 🔒 SECURITY CONFIG
 CORS_ALLOW_CREDENTIALS = True
-CORS_ALLOWED_ORIGINS = env("CORS_ALLOWED_ORIGINS",
-                           default="https://dropnroll.co.uk").split(',')
+CORS_ALLOWED_ORIGINS = env(
+    "CORS_ALLOWED_ORIGINS", default="https://dropnroll.co.uk"
+).split(",")
 SESSION_COOKIE_SECURE = env.bool("SESSION_COOKIE_SECURE", default=True)
 CSRF_COOKIE_SECURE = env.bool("CSRF_COOKIE_SECURE", default=True)
-SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 REST_FRAMEWORK = {
-    'DEFAULT_AUTHENTICATION_CLASSES': (
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    "DEFAULT_AUTHENTICATION_CLASSES": (
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
     ),
-    'DEFAULT_PERMISSION_CLASSES': (
-        'rest_framework.permissions.AllowAny',
-    ),
+    "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.AllowAny",),
 }
 
 SWAGGER_SETTINGS = {
@@ -193,8 +190,8 @@ SWAGGER_SETTINGS = {
 }
 
 AUTHENTICATION_BACKENDS = [
-    'django.contrib.auth.backends.ModelBackend',
-    'social_core.backends.google.GoogleOAuth2',
+    "django.contrib.auth.backends.ModelBackend",
+    "social_core.backends.google.GoogleOAuth2",
 ]
 
 SIMPLE_JWT = {
@@ -206,18 +203,17 @@ SIMPLE_JWT = {
 }
 
 # CELERY
-CELERY_BROKER_URL = env("CELERY_BROKER_URL",
-                        default="redis://localhost:6379/0")
-CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND",
-                            default="redis://localhost:6379/0")
-CELERY_ACCEPT_CONTENT = ['json']
-CELERY_TASK_SERIALIZER = 'json'
-CELERY_RESULT_SERIALIZER = 'json'
+CELERY_BROKER_URL = env("CELERY_BROKER_URL", default="redis://localhost:6379/0")
+CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", default="redis://localhost:6379/0")
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = env("CELERY_TIMEZONE", default="UTC")
 
 # Email backend
 EMAIL_BACKEND = env(
-    "EMAIL_BACKEND", default="django.core.mail.backends.smtp.EmailBackend")
+    "EMAIL_BACKEND", default="django.core.mail.backends.smtp.EmailBackend"
+)
 # EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"  # For testing"
 EMAIL_HOST = env("EMAIL_HOST", default="smtp.gmail.com")
 EMAIL_PORT = env("EMAIL_PORT", default=587)
@@ -239,12 +235,11 @@ GOOGLE_MAPS_API_KEY = env("GOOGLE_MAPS_API_KEY")
 
 # JWT settings for consistency with existing auth
 SOCIAL_AUTH_JSONFIELD_ENABLED = True
-SOCIAL_AUTH_USER_MODEL = 'users.User'
+SOCIAL_AUTH_USER_MODEL = "users.User"
 
 # paypal payment
 # Use 'https://api-m.paypal.com' for live
-PAYPAL_API_URL = env(
-    "PAYPAL_API_URL", default='https://api-m.sandbox.paypal.com')
+PAYPAL_API_URL = env("PAYPAL_API_URL", default="https://api-m.sandbox.paypal.com")
 PAYPAL_CLIENT_ID = env("PAYPAL_CLIENT_ID")  # From PayPal Developer Dashboard
 # From PayPal Developer Dashboard
 PAYPAL_CLIENT_SECRET = env("PAYPAL_CLIENT_SECRET")
@@ -255,14 +250,14 @@ PAYPAL_RETURN_URL = env("PAYPAL_RETURN_URL")
 PAYPAL_CANCEL_URL = env("PAYPAL_CANCEL_URL")
 
 # stripe payment
-STRIPE_SECRET_KEY = env('STRIPE_SECRET_KEY')
-STRIPE_PUBLISHABLE_KEY = env('STRIPE_PUBLISHABLE_KEY')
-STRIPE_WEBHOOK_SECRET = env('STRIPE_WEBHOOK_SECRET')
+STRIPE_SECRET_KEY = env("STRIPE_SECRET_KEY")
+STRIPE_PUBLISHABLE_KEY = env("STRIPE_PUBLISHABLE_KEY")
+STRIPE_WEBHOOK_SECRET = env("STRIPE_WEBHOOK_SECRET")
 
 # ADMIN SITE CUSTOMIZATION SETTINGS WITH UNFOLD
 UNFOLD = {
     "SITE_TITLE": "Drop N Roll Administration",
-    "SITE_HEADER": 'Drop N Roll',
+    "SITE_HEADER": "Drop N Roll",
     # "SITE_SUBHEADER": "Appears under SITE_HEADER",
     "SITE_DROPDOWN": [
         {
@@ -272,9 +267,7 @@ UNFOLD = {
         },
         # ...
     ],
-
     "DASHBOARD_CALLBACK": "Drop_N_Roll.utils.dashboard.dashboard_callback",
-
     "SITE_URL": "/",
     # "SITE_ICON": lambda request: static("icon.svg"),  # both modes, optimise for 32px height
     # "SITE_ICON": {
@@ -310,9 +303,7 @@ UNFOLD = {
     },
     "STYLES": [
         lambda request: static("css/style.css"),
-
         lambda request: static("css/material-icons.css"),
-
     ],
     "SCRIPTS": [
         lambda request: static("js/script.js"),
@@ -379,7 +370,7 @@ UNFOLD = {
                         "link": reverse_lazy("admin:index"),
                         "permission": lambda request: request.user.is_superuser,
                     },
-                ]
+                ],
             },
             {
                 "title": _("Users"),
@@ -398,8 +389,7 @@ UNFOLD = {
                         "link": reverse_lazy("admin:users_customerprofile_changelist"),
                         "permission": lambda request: request.user.is_superuser,
                     },
-
-                ]
+                ],
             },
             {
                 "title": _("Shipping"),
@@ -434,7 +424,9 @@ UNFOLD = {
                         "title": "Bulk Driver Assignment",
                         # Material Icon (adjust as needed)
                         "icon": "assignment",
-                        "link": reverse_lazy("admin:booking_booking_bulk_assign_drivers"),
+                        "link": reverse_lazy(
+                            "admin:booking_booking_bulk_assign_drivers"
+                        ),
                         # Restrict access
                         "permissions": ["booking.change_booking"],
                     },
@@ -456,7 +448,9 @@ UNFOLD = {
                     {
                         "title": _("Driver Invites"),
                         "icon": "account_circle",
-                        "link": reverse_lazy("admin:driver_driverinvitation_changelist"),
+                        "link": reverse_lazy(
+                            "admin:driver_driverinvitation_changelist"
+                        ),
                         "permission": lambda request: request.user.is_superuser,
                     },
                     {
@@ -468,7 +462,9 @@ UNFOLD = {
                     {
                         "title": _("Availability"),
                         "icon": "do_not_disturb_off",
-                        "link": reverse_lazy("admin:driver_driveravailability_changelist"),
+                        "link": reverse_lazy(
+                            "admin:driver_driveravailability_changelist"
+                        ),
                         "permission": lambda request: request.user.is_superuser,
                     },
                     {
@@ -519,7 +515,9 @@ UNFOLD = {
                     {
                         "title": _("Proof Of Delivery"),
                         "icon": "directions_car",
-                        "link": reverse_lazy("admin:tracking_proofofdelivery_changelist"),
+                        "link": reverse_lazy(
+                            "admin:tracking_proofofdelivery_changelist"
+                        ),
                         "permission": lambda request: request.user.is_superuser,
                     },
                     {
@@ -540,18 +538,21 @@ UNFOLD = {
                     {
                         "title": _("Inquiries"),
                         "icon": "business_center",
-                        "link": reverse_lazy("admin:business_businessinquiry_changelist"),
+                        "link": reverse_lazy(
+                            "admin:business_businessinquiry_changelist"
+                        ),
                         "permission": lambda request: request.user.is_superuser,
                     },
                     {
                         "title": _("Pricing"),
                         "icon": "price_change",
-                        "link": reverse_lazy("admin:business_businesspricing_changelist"),
+                        "link": reverse_lazy(
+                            "admin:business_businesspricing_changelist"
+                        ),
                         "permission": lambda request: request.user.is_superuser,
                     },
                 ],
             },
-
             # SUPPORT SECTION
             {
                 "title": _("Support"),
@@ -564,7 +565,6 @@ UNFOLD = {
                         "title": _("Open Tickets"),
                         "icon": "list_alt",
                         "link": reverse_lazy("admin:support_ticket_changelist"),
-
                         "permission": lambda request: request.user.is_superuser,
                     },
                     {
@@ -582,9 +582,7 @@ UNFOLD = {
                 ],
             },
         ],
-
     },
-
     # "TABS": [
     #     {
     #         "models": [
@@ -617,5 +615,5 @@ def badge_callback(request):
 # def permission_callback(request):
 #     return request.user.has_perm("sample_app.change_model")
 
-SITE_URL = env("SITE_URL", default='http://127.0.0.1:8000')
+SITE_URL = env("SITE_URL", default="http://127.0.0.1:8000")
 FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:5173")
