@@ -25,9 +25,7 @@ from django.utils import timezone  # type: ignore
 from payments.models import PaymentTransaction, PaymentStatus
 from payments.serializers import PaymentTransactionSerializer
 
-<<<<<<< Updated upstream
 from .models import Quote, Booking, RecurringSchedule, BookingStatus, ShippingType, ServiceType, Route
-=======
 from .models import (
     Quote,
     Booking,
@@ -36,21 +34,17 @@ from .models import (
     ShippingType,
     ServiceType,
 )
->>>>>>> Stashed changes
 from .permissions import IsCustomer, IsAdminOrReadOnly, IsDriverOrAdmin
 from .serializers import (
     QuoteRequestSerializer,
     QuoteSerializer,
     BookingCreateSerializer,
     BookingSerializer,
-<<<<<<< Updated upstream
     RecurringScheduleSerializer, ShippingTypeSerializer, ServiceTypeSerializer,
     RouteSerializer,
-=======
     RecurringScheduleSerializer,
     ShippingTypeSerializer,
     ServiceTypeSerializer,
->>>>>>> Stashed changes
 )
 from .utils.pricing import compute_quote
 from .utils.utils import (
@@ -670,7 +664,6 @@ def track_parcel(request):
     # cache.set(f"track:{tracking_number}", payload, timeout=60)
 
     return Response(payload, status=200)
-<<<<<<< Updated upstream
 
 class RouteViewSet(viewsets.ModelViewSet):
     queryset = Route.objects.all()
@@ -800,5 +793,3 @@ class RouteViewSet(viewsets.ModelViewSet):
             "bookings_updated": updated,
             "shift_assigned": route.shift.driver_id is not None if route.shift else False
         })
-=======
->>>>>>> Stashed changes
