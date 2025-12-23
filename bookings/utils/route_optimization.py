@@ -189,10 +189,10 @@ def optimize_routes(bookings, hub_lat, hub_lng, time_matrix, distance_matrix, dr
         # Weight dimension
         def weight_callback(from_index):
             node = manager.IndexToNode(from_index)
-            return 0 if node == 0 else float(bookings[node - 1].quote.weight_kg or 0)
+            return 0 if node == 0 else int(float(bookings[node - 1].quote.weight_kg or 0) * 1000)
 
         weight_index = routing.RegisterUnaryTransitCallback(weight_callback)
-        weight_capacities = [float(d.max_weight_kg or 1000) for d in drivers] if not dummy else [10000.0] * m
+        weight_capacities = [int(float(d.max_weight_kg or 1000) * 1000) for d in drivers] if not dummy else [10000000] * m
         routing.AddDimensionWithVehicleCapacity(
             weight_index,
             0,
@@ -204,7 +204,7 @@ def optimize_routes(bookings, hub_lat, hub_lng, time_matrix, distance_matrix, dr
         # Volume dimension
         def volume_callback(from_index):
             node = manager.IndexToNode(from_index)
-            return 0 if node == 0 else float(bookings[node - 1].quote.volume_m3 or 0) * 1000
+            return 0 if node == 0 else int(float(bookings[node - 1].quote.volume_m3 or 0) * 1000)
 
         volume_index = routing.RegisterUnaryTransitCallback(volume_callback)
         volume_capacities = [int((d.max_volume_m3 or 10) * 1000) for d in drivers] if not dummy else [100000] * m
