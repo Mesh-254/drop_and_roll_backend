@@ -128,6 +128,8 @@ SERVICE_TYPE_TO_BUCKET = {
     'Budget': 'three_day',
 }
 
+MIN_ROUTE_HOURS = 4.0
+
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
 def optimize_bookings(self):
     now = timezone.now()
@@ -144,9 +146,11 @@ def optimize_bookings(self):
     )
 
     pickup_candidates = Booking.objects.filter(
+        ~Exists(Route.objects.filter(bookings=OuterRef('pk'))),
         status=BookingStatus.SCHEDULED,
         pickup_address__latitude__isnull=False,
         dropoff_address__latitude__isnull=False,
+       
     ).annotate(
         bucket=service_case,
     ).prefetch_related(
@@ -156,6 +160,7 @@ def optimize_bookings(self):
     )
 
     delivery_candidates = Booking.objects.filter(
+        ~Exists(Route.objects.filter(bookings=OuterRef('pk'))),  # positional first
         status=BookingStatus.AT_HUB,
         pickup_address__latitude__isnull=False,
         dropoff_address__latitude__isnull=False,
@@ -173,18 +178,24 @@ def optimize_bookings(self):
         hub_lng = hub.address.longitude
 
         # Filter candidates near hub (using geopy for distance; adjust radius as needed)
-        hub_pickups = [b for b in pickup_candidates if great_circle((b.pickup_address.latitude, b.pickup_address.longitude), (hub_lat, hub_lng)).km < 50]  # Example radius
-        hub_deliveries = [b for b in delivery_candidates if great_circle((b.dropoff_address.latitude, b.dropoff_address.longitude), (hub_lat, hub_lng)).km < 50]
+        hub_pickups = [b for b in pickup_candidates if great_circle((b.pickup_address.latitude, b.pickup_address.longitude), (hub_lat, hub_lng)).km < 50 and (not b.hub or b.hub == hub)]  # Example radius
+        hub_deliveries = [b for b in delivery_candidates if great_circle((b.dropoff_address.latitude, b.dropoff_address.longitude), (hub_lat, hub_lng)).km < 50 and (not b.hub or b.hub == hub)]
 
         # FIXED: Assign hub to bookings in this group (only if null, to preserve existing)
         pickup_ids_to_assign = [b.id for b in hub_pickups if not b.hub]
         if pickup_ids_to_assign:
             Booking.objects.filter(id__in=pickup_ids_to_assign).update(hub=hub)
+            for b in hub_pickups:
+                if b.id in pickup_ids_to_assign:
+                    b.hub = hub
             logger.info(f"Assigned hub {hub.name} to {len(pickup_ids_to_assign)} pickup bookings based on proximity")
 
         delivery_ids_to_assign = [b.id for b in hub_deliveries if not b.hub]
         if delivery_ids_to_assign:
             Booking.objects.filter(id__in=delivery_ids_to_assign).update(hub=hub)
+            for b in hub_deliveries:
+                if b.id in delivery_ids_to_assign:
+                    b.hub = hub
             logger.info(f"Assigned hub {hub.name} to {len(delivery_ids_to_assign)} delivery bookings based on proximity")
         
         # Bucket them
@@ -204,17 +215,21 @@ def optimize_bookings(self):
                 # Get matrices (time/distance)
                 time_matrix, distance_matrix = get_time_matrix([b.pickup_address for b in pickups], hub_lat, hub_lng)
                 # Get drivers for hub (assuming availability check)
-                drivers = DriverProfile.objects.filter(hub=hub).filter(availability__available=True).order_by('-shift__remaining_hours')  # Example
+                drivers = DriverProfile.objects.filter(hub=hub).filter(availability__available=True).select_related('user', 'availability')
                 # Optimize
                 routes = optimize_routes(pickups, hub_lat, hub_lng, time_matrix, distance_matrix, drivers, leg_type='pickup')
 
                 # Line-by-line implementation starts here for pickups
                 for ordered, hrs, km, driver, etas in routes:  # Existing: Loop over optimized route tuples (bookings list, hours, km, driver or None, ETAs)
+                    if hrs < MIN_ROUTE_HOURS:
+                        logger.info(f"Skipping small route: {hrs:.2f}h < {MIN_ROUTE_HOURS}h")
+                        continue
+
                     ordered_stops = [  # Existing: Build JSON for stops (booking_id, address coords, eta)
                         {
                             'booking_id': str(b.id),
                             'address': {'lat': float(b.pickup_address.latitude), 'lng': float(b.pickup_address.longitude)},
-                            'eta': eta
+                            'eta': eta.isoformat() if eta else None
                         } for b, eta in zip(ordered, etas)
                     ]
 
@@ -276,10 +291,10 @@ def optimize_bookings(self):
                             continue
 
                         # Existing: Min hours rule for non-same-day
-                        if bucket != 'same_day' and hrs < DriverShift.MIN_ROUTE_HOURS:
+                        if hrs < MIN_ROUTE_HOURS:
                             logger.info(
-                                f"Skipping small non-same_day route for {driver.user.get_full_name()} "
-                                f"({hrs:.1f}h < {DriverShift.MIN_ROUTE_HOURS}h minimum)"
+                                f"Skipping small route for {driver.user.get_full_name()} "
+                                f"({hrs:.1f}h < {MIN_ROUTE_HOURS}h minimum)"
                             )
                             continue
 
@@ -327,6 +342,10 @@ def optimize_bookings(self):
 
                 # Line-by-line for deliveries (mirror of pickups, with leg_type='delivery' and status updates adjusted)
                 for ordered, hrs, km, driver, etas in routes:
+                    if hrs < MIN_ROUTE_HOURS:
+                        logger.info(f"Skipping small route: {hrs:.2f}h < {MIN_ROUTE_HOURS}h")
+                        continue
+
                     ordered_stops = [
                         {
                             'booking_id': str(b.id),
@@ -388,10 +407,10 @@ def optimize_bookings(self):
                             )
                             continue
 
-                        if bucket != 'same_day' and hrs < DriverShift.MIN_ROUTE_HOURS:
+                        if hrs < MIN_ROUTE_HOURS:
                             logger.info(
-                                f"Skipping small non-same_day route for {driver.user.get_full_name()} "
-                                f"({hrs:.1f}h < {DriverShift.MIN_ROUTE_HOURS}h minimum)"
+                                f"Skipping small route for {driver.user.get_full_name()} "
+                                f"({hrs:.1f}h < {MIN_ROUTE_HOURS}h minimum)"
                             )
                             continue
 
