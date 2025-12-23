@@ -25,7 +25,9 @@ logger = logging.getLogger(__name__)
 def create_role_profile(sender, instance: User, created, **kwargs):
     if not created:
         return
-    if instance.role == User.Role.CUSTOMER and not hasattr(instance, "customer_profile"):
+    if instance.role == User.Role.CUSTOMER and not hasattr(
+        instance, "customer_profile"
+    ):
         CustomerProfile.objects.create(user=instance)
     elif instance.role == User.Role.DRIVER and not hasattr(instance, "driver_profile"):
         DriverProfile.objects.create(user=instance)
@@ -44,7 +46,9 @@ def ensure_profile_on_role_change(sender, instance: User, **kwargs):
     if prev.role == instance.role:
         return
     # Create the profile for the new role if missing
-    if instance.role == User.Role.CUSTOMER and not hasattr(instance, "customer_profile"):
+    if instance.role == User.Role.CUSTOMER and not hasattr(
+        instance, "customer_profile"
+    ):
         CustomerProfile.objects.get_or_create(user=instance)
     elif instance.role == User.Role.DRIVER and not hasattr(instance, "driver_profile"):
         DriverProfile.objects.get_or_create(user=instance)
@@ -61,8 +65,7 @@ def send_driver_invitation_on_create(sender, instance, created, **kwargs):
             email=instance.email, status=DriverInvitation.Status.PENDING
         ).first()
         if existing_invitation and not existing_invitation.is_expired():
-            logger.warning(
-                f"Active invitation already exists for {instance.email}")
+            logger.warning(f"Active invitation already exists for {instance.email}")
             return
 
         # Create invitation
@@ -97,8 +100,7 @@ def send_driver_invitation_on_create(sender, instance, created, **kwargs):
             )
             logger.info(f"Invitation sent to {instance.email}")
         except Exception as e:
-            logger.error(
-                f"Failed to send invitation to {instance.email}: {str(e)}")
+            logger.error(f"Failed to send invitation to {instance.email}: {str(e)}")
 
 
 @receiver(pre_save, sender=User)
@@ -130,26 +132,28 @@ def send_welcome_on_activation(sender, instance: User, created, **kwargs):
         # No email on create (use confirmation flow); skip non-customers
         return
 
-    old_active = getattr(instance, '_old_is_active', False)
+    old_active = getattr(instance, "_old_is_active", False)
     if instance.is_active and not old_active:
         # Activated (e.g., via confirmation or admin toggle)
         try:
             subject = "Welcome to Drop 'N Roll!"
             context = {
-                'full_name': instance.full_name,
-                'email': instance.email,
-                'site_name': 'Drop \'n Roll',
-                'support_email': settings.DEFAULT_FROM_EMAIL,
-                'site_url': getattr(settings, 'FRONTEND_URL'),
+                "full_name": instance.full_name,
+                "email": instance.email,
+                "site_name": "Drop 'n Roll",
+                "support_email": settings.DEFAULT_FROM_EMAIL,
+                "site_url": getattr(settings, "FRONTEND_URL"),
             }
             send_welcome_email.delay(
                 subject=subject,
                 context=context,
                 from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[instance.email]
+                recipient_list=[instance.email],
             )
             logger.info(
-                f"Welcome email queued for activated customer: {instance.email}")
+                f"Welcome email queued for activated customer: {instance.email}"
+            )
         except Exception as e:
             logger.error(
-                f"Failed to queue welcome email for {instance.email}: {str(e)}")
+                f"Failed to queue welcome email for {instance.email}: {str(e)}"
+            )
