@@ -455,7 +455,7 @@ class RouteAdmin(ModelAdmin):
             'action_checkbox_name': admin.helpers.ACTION_CHECKBOX_NAME,
             'drivers': DriverProfile.objects.filter(status='active'),
         }
-        return render(request, 'templates/admin/assign_driver.html', context)  # Create this template
+        return render(request, 'admin/assign_driver.html', context)  # Create this template
 
     def re_optimize(self, request, queryset):
         # Re-run optimization on selected
