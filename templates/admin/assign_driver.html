@@ -1,17 +1,164 @@
 {% extends "admin/base_site.html" %}
+{% load static %}
+
+{% block extrastyle %}
+<style>
+    :root {
+        --orange: #ff6b35;     /* Vibrant orange */
+        --orange-dark: #e55a2b;
+        --green: #2ecc71;      /* Fresh green */
+        --green-dark: #27ae60;
+        --white: #ffffff;
+        --black: #2c3e50;
+        --gray-light: #f8f9fa;
+        --gray: #ecf0f1;
+        --shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    }
+
+    .driver-assign-container {
+        max-width: 600px;
+        margin: 40px auto;
+        padding: 30px;
+        background: var(--white);
+        border-radius: 12px;
+        box-shadow: var(--shadow);
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+
+    .driver-assign-header {
+        text-align: center;
+        margin-bottom: 30px;
+        color: var(--black);
+    }
+
+    .driver-assign-header h2 {
+        margin: 0;
+        font-size: 24px;
+        font-weight: 600;
+    }
+
+    .driver-assign-header p {
+        margin: 10px 0 0;
+        color: #7f8c8d;
+        font-size: 16px;
+    }
+
+    .form-group {
+        margin-bottom: 25px;
+    }
+
+    .form-group label {
+        display: block;
+        margin-bottom: 8px;
+        font-weight: 600;
+        color: var(--black);
+        font-size: 15px;
+    }
+
+    select[name="driver"] {
+        width: 100%;
+        padding: 14px 16px;
+        font-size: 16px;
+        border: 2px solid var(--gray);
+        border-radius: 8px;
+        background-color: var(--white);
+        transition: all 0.3s ease;
+        box-sizing: border-box;
+    }
+
+    select[name="driver"]:focus {
+        outline: none;
+        border-color: var(--orange);
+        box-shadow: 0 0 0 3px rgba(255, 107, 53, 0.2);
+    }
+
+    .submit-btn {
+        background: linear-gradient(135deg, var(--orange), var(--orange-dark));
+        color: white;
+        padding: 14px 32px;
+        font-size: 16px;
+        font-weight: 600;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 15px rgba(255, 107, 53, 0.3);
+        margin-top: 10px;
+    }
+
+    .submit-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(255, 107, 53, 0.4);
+        background: linear-gradient(135deg, var(--orange-dark), #d35400);
+    }
+
+    .submit-btn:active {
+        transform: translateY(0);
+    }
+
+    .route-count {
+        display: inline-block;
+        background: var(--green);
+        color: white;
+        padding: 6px 12px;
+        border-radius: 20px;
+        font-size: 14px;
+        font-weight: 600;
+        margin-left: 8px;
+    }
+
+    .footer-note {
+        text-align: center;
+        margin-top: 30px;
+        color: #95a5a6;
+        font-size: 14px;
+    }
+</style>
+{% endblock %}
+
 {% block content %}
-<form method="post" action="">
-    {% csrf_token %}
-    <p>Select driver for {{ queryset.count }} routes:</p>
-    <select name="driver">
-        {% for d in drivers %}
-        <option value="{{ d.id }}">{{ d.user.full_name }} ({{ d.vehicle_type }})</option>
+<div class="driver-assign-container">
+    <div class="driver-assign-header">
+        <h2>Assign Driver</h2>
+        <p>
+            Select a driver to assign to 
+            <strong>{{ queryset.count }}</strong> 
+            <span class="route-count">{{ queryset.count }} route{{ queryset.count|pluralize }}</span>
+        </p>
+    </div>
+
+    <form method="post" action="">
+        {% csrf_token %}
+
+        <div class="form-group">
+            <label for="id_driver">Available Drivers</label>
+            <select name="driver" id="id_driver" required>
+                <option value="">--------- Choose a driver ---------</option>
+                {% for d in drivers %}
+                <option value="{{ d.id }}">
+                    {{ d.user.get_full_name|default:d.user.email }} 
+                    ({{ d.vehicle_type|capfirst }} 
+                    {% if d.hub %} - {{ d.hub.name }}{% endif %})
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <!-- Hidden fields for selected routes -->
+        {% for obj in queryset %}
+            <input type="hidden" name="_selected_action" value="{{ obj.pk }}" />
         {% endfor %}
-    </select>
-    {% for obj in queryset %}
-    <input type="hidden" name="_selected_action" value="{{ obj.pk }}" />
-    {% endfor %}
-    <input type="hidden" name="action" value="assign_driver_manually" />
-    <input type="submit" name="apply" value="Assign" />
-</form>
+        <input type="hidden" name="action" value="assign_driver_manually" />
+
+        <div style="text-align: center;">
+            <button type="submit" name="apply" class="submit-btn">
+                Assign Selected Routes
+            </button>
+        </div>
+    </form>
+
+    <div class="footer-note">
+        This action will assign the selected routes to the chosen driver.
+    </div>
+</div>
 {% endblock %}
