@@ -3,7 +3,7 @@ from rest_framework.routers import DefaultRouter
 
 from driver.api_views import (
     DriverAvailabilityViewSet, DriverPayoutViewSet, DriverRatingViewSet, DriverDocumentViewSet, DriverInviteViewSet,
-DriverAssignedBookingViewSet, DriverMetricsView)
+DriverAssignedBookingViewSet, DriverMetricsView, DriverRouteViewSet)
 
 router = DefaultRouter()
 
@@ -15,6 +15,7 @@ router.register(r"driver-docs", DriverDocumentViewSet, basename="driver-docs")
 router.register(r"driver-invites", DriverInviteViewSet, basename="driver-invites")
 
 router.register(r'assigned-bookings', DriverAssignedBookingViewSet, basename='driver-assigned-booking')
+router.register(r'driver-routes', DriverRouteViewSet, basename='driver-route')
 
 
 urlpatterns = [path("", include(router.urls)),
