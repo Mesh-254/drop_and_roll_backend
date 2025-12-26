@@ -5,6 +5,7 @@ from decimal import Decimal
 from django.db import models
 from django.conf import settings
 from django.core.validators import MinValueValidator, EmailValidator, RegexValidator, ValidationError
+from django.db.models import Case, When, IntegerField
 from django.db import models
 from django.utils import timezone
 import uuid
@@ -444,6 +445,44 @@ class Route(models.Model):
             if not self.hub:
                 logger.warning(f"Route {self.id} saved without hub, driver, or bookings. Hub remains unset.")
 
+
+    @property
+    def ordered_bookings(self):
+        """
+        Returns Booking objects in the exact order defined in ordered_stops (VRP-optimized sequence).
+        - Extracts booking_ids from ordered_stops.
+        - Uses Case/When to preserve order in a single DB query.
+        - Appends any missing bookings at the end for safety.
+        - Logs warnings if ordered_stops is incomplete.
+        """
+        if not self.ordered_stops:
+            logger.warning(f"Route {self.id} has empty ordered_stops; falling back to all bookings.")
+            return list(self.bookings.all())
+
+        # Extract booking_ids (assume str UUIDs in JSON)
+        booking_ids = [stop.get('booking_id') for stop in self.ordered_stops if stop.get('booking_id')]
+        if not booking_ids:
+            logger.warning(f"Route {self.id} ordered_stops has no valid booking_ids; falling back to all bookings.")
+            return list(self.bookings.all())
+
+        try:
+            uuid_ids = [uuid.UUID(bid) for bid in booking_ids]
+        except ValueError:
+            raise ValidationError(f"Invalid booking_id in Route {self.id} ordered_stops.")
+
+        # Preserve order with Case/When
+        preserved_order = Case(
+            *[When(id=uuid_id, then=i) for i, uuid_id in enumerate(uuid_ids)],
+            output_field=IntegerField()
+        )
+        ordered_qs = self.bookings.filter(id__in=uuid_ids).annotate(
+            order=preserved_order
+        ).order_by('order')
+
+        # Append missing bookings (if any)
+        missing_qs = self.bookings.exclude(id__in=uuid_ids)
+        return list(ordered_qs) + list(missing_qs)
+    
 # ADD Proof of delivery
 class ProofOfDelivery(models.Model):
     pass
