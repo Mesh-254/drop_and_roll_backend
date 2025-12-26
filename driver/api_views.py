@@ -22,21 +22,31 @@ from django.db.models import Case, When, IntegerField
 from bookings.models import Booking, BookingStatus, Route
 from bookings.serializers import BookingSerializer
 from driver.models import (
-    DriverAvailability, DriverPayout, DriverRating, DriverDocument, DriverShift, DriverProfile,
+    DriverAvailability,
+    DriverPayout,
+    DriverRating,
+    DriverDocument,
+    DriverShift,
+    DriverProfile,
 )
 from driver.serializers import (
     DriverAvailabilitySerializer,
-    DriverPayoutSerializer, DriverPayoutCreateSerializer,
-    DriverRatingSerializer, DriverDocumentSerializer, DriverInviteCreateSerializer, DriverInviteDetailSerializer,
-    DriverInviteAcceptSerializer, DriverShiftSerializer,
+    DriverPayoutSerializer,
+    DriverPayoutCreateSerializer,
+    DriverRatingSerializer,
+    DriverDocumentSerializer,
+    DriverInviteCreateSerializer,
+    DriverInviteDetailSerializer,
+    DriverInviteAcceptSerializer,
+    DriverShiftSerializer,
 )
 from users.serializers import UserSerializer
 from .permissions import IsAdmin, IsDriver, IsCustomer
 
 
-class DriverAvailabilityViewSet(mixins.CreateModelMixin,
-                                mixins.ListModelMixin,
-                                viewsets.GenericViewSet):
+class DriverAvailabilityViewSet(
+    mixins.CreateModelMixin, mixins.ListModelMixin, viewsets.GenericViewSet
+):
     serializer_class = DriverAvailabilitySerializer
 
     def get_permissions(self):
@@ -47,9 +57,11 @@ class DriverAvailabilityViewSet(mixins.CreateModelMixin,
         return super().get_permissions()
 
     def get_queryset(self):
-        if getattr(self, 'swagger_fake_view', False):
+        if getattr(self, "swagger_fake_view", False):
             return DriverAvailability.objects.none()
-        return DriverAvailability.objects.select_related("driver_profile", "driver_profile__user")
+        return DriverAvailability.objects.select_related(
+            "driver_profile", "driver_profile__user"
+        )
 
     # @swagger_auto_schema(method="post", request_body=DriverAvailabilitySerializer, responses={200: DriverAvailabilitySerializer})
     def create(self, request, *args, **kwargs):
@@ -81,11 +93,12 @@ class DriverPayoutViewSet(viewsets.ModelViewSet):
     serializer_class = DriverPayoutSerializer
 
     def get_queryset(self):
-        if getattr(self, 'swagger_fake_view', False):
+        if getattr(self, "swagger_fake_view", False):
             return DriverPayout.objects.none()
         u = self.request.user
         qs = DriverPayout.objects.select_related(
-            "driver_profile", "driver_profile__user")
+            "driver_profile", "driver_profile__user"
+        )
         if getattr(u, "role", None) == "driver":
             return qs.filter(driver_profile__user=u)
         return qs  # admin
@@ -110,9 +123,9 @@ class DriverPayoutViewSet(viewsets.ModelViewSet):
         return Response(DriverPayoutSerializer(payout).data, status=201)
 
 
-class DriverRatingViewSet(mixins.CreateModelMixin,
-                          mixins.ListModelMixin,
-                          viewsets.GenericViewSet):
+class DriverRatingViewSet(
+    mixins.CreateModelMixin, mixins.ListModelMixin, viewsets.GenericViewSet
+):
     serializer_class = DriverRatingSerializer
 
     def get_permissions(self):
@@ -123,7 +136,7 @@ class DriverRatingViewSet(mixins.CreateModelMixin,
         return super().get_permissions()
 
     def get_queryset(self):
-        if getattr(self, 'swagger_fake_view', False):
+        if getattr(self, "swagger_fake_view", False):
             return DriverRating.objects.none()
         qs = DriverRating.objects.select_related("driver_profile", "customer")
         driver_id = self.request.query_params.get("driver_profile")
@@ -140,8 +153,9 @@ class DriverRatingViewSet(mixins.CreateModelMixin,
         profile = rating.driver_profile
         # Simple running average
         new_count = profile.rating_count + 1
-        new_avg = (profile.rating_avg * profile.rating_count +
-                   Decimal(rating.rating)) / Decimal(new_count)
+        new_avg = (
+            profile.rating_avg * profile.rating_count + Decimal(rating.rating)
+        ) / Decimal(new_count)
         profile.rating_count = new_count
         profile.rating_avg = new_avg.quantize(Decimal("0.01"))
         profile.save(update_fields=["rating_count", "rating_avg"])
@@ -152,7 +166,7 @@ class DriverDocumentViewSet(
     mixins.CreateModelMixin,
     mixins.ListModelMixin,
     mixins.DestroyModelMixin,
-    viewsets.GenericViewSet
+    viewsets.GenericViewSet,
 ):
     serializer_class = DriverDocumentSerializer
     permission_classes = [IsAuthenticated]
@@ -164,10 +178,10 @@ class DriverDocumentViewSet(
         return [IsAuthenticated(), IsDriver()]
 
     def get_queryset(self):
-        if getattr(self, 'swagger_fake_view', False):
+        if getattr(self, "swagger_fake_view", False):
             return DriverDocument.objects.none()
         user = self.request.user
-        if user.role == 'admin':
+        if user.role == "admin":
             return DriverDocument.objects.all()
         if hasattr(user, "driver_profile"):
             return user.driver_profile.documents.all()
@@ -175,23 +189,23 @@ class DriverDocumentViewSet(
 
     @transaction.atomic
     def perform_create(self, serializer):
-        if not hasattr(self.request.user, 'driver_profile'):
+        if not hasattr(self.request.user, "driver_profile"):
             print("User has no driver profile:", self.request.user)
             raise serializers.ValidationError(
                 {"detail": "User must have a driver profile to upload documents."}
             )
         driver = self.request.user.driver_profile
-        doc_type = serializer.validated_data.get('doc_type')
+        doc_type = serializer.validated_data.get("doc_type")
         print("Uploading document of type:", doc_type)
         print("Driver ID:", driver.id)
-        print("File info:", serializer.validated_data.get('file'))
+        print("File info:", serializer.validated_data.get("file"))
         # Check if document already exists for this driver and doc_type
         existing_doc = DriverDocument.objects.filter(
             driver=driver, doc_type=doc_type
         ).first()
         if existing_doc:
             # Update existing document
-            existing_doc.file = serializer.validated_data['file']
+            existing_doc.file = serializer.validated_data["file"]
             existing_doc.uploaded_at = timezone.now()
             existing_doc.verified = False  # Reset verification on new upload
             existing_doc.notes = None
@@ -209,8 +223,10 @@ class DriverDocumentViewSet(
         notes = request.data.get("notes", None)
         if document.verified == verified:
             return Response(
-                {"detail": f"Document is already {'verified' if verified else 'unverified'}"},
-                status=status.HTTP_400_BAD_REQUEST
+                {
+                    "detail": f"Document is already {'verified' if verified else 'unverified'}"
+                },
+                status=status.HTTP_400_BAD_REQUEST,
             )
         document.verified = verified
         document.notes = notes if notes is not None else document.notes
@@ -219,13 +235,14 @@ class DriverDocumentViewSet(
         return Response(DriverDocumentSerializer(document).data)
 
 
-class DriverInviteViewSet(mixins.CreateModelMixin,
-                          mixins.ListModelMixin,
-                          viewsets.GenericViewSet):
+class DriverInviteViewSet(
+    mixins.CreateModelMixin, mixins.ListModelMixin, viewsets.GenericViewSet
+):
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def get_queryset(self):
         from .models import DriverInvitation
+
         return DriverInvitation.objects.all().order_by("-expires_at")
 
     def get_serializer_class(self):
@@ -233,7 +250,9 @@ class DriverInviteViewSet(mixins.CreateModelMixin,
             return DriverInviteCreateSerializer
         return DriverInviteDetailSerializer
 
-    @action(methods=["post"], detail=False, url_path="accept", permission_classes=[AllowAny])
+    @action(
+        methods=["post"], detail=False, url_path="accept", permission_classes=[AllowAny]
+    )
     def accept(self, request):
         s = DriverInviteAcceptSerializer(data=request.data)
         s.is_valid(raise_exception=True)
@@ -245,7 +264,7 @@ class StandardPagination(PageNumberPagination):
     # Default items per page (adjust based on UI needs, e.g., 20-50)
     page_size = 10
     # Allow frontend to override, e.g., ?page_size=20
-    page_size_query_param = 'page_size'
+    page_size_query_param = "page_size"
     max_page_size = 100  # Prevent abuse
 
 
@@ -255,7 +274,7 @@ class DriverAssignedBookingViewSet(mixins.ListModelMixin, viewsets.GenericViewSe
     pagination_class = StandardPagination
 
     def get_queryset(self):
-        if getattr(self, 'swagger_fake_view', False):
+        if getattr(self, "swagger_fake_view", False):
             return Booking.objects.none()
 
         user = self.request.user
@@ -263,9 +282,13 @@ class DriverAssignedBookingViewSet(mixins.ListModelMixin, viewsets.GenericViewSe
         status_param = self.request.query_params.get("status")
 
         # Filter bookings for the authenticated driver
-        qs = Booking.objects.filter(driver__user=self.request.user).select_related(
-            "pickup_address", "dropoff_address", "customer", "driver", "quote"
-        ).prefetch_related("quote__shipping_type", "quote__service_type")
+        qs = (
+            Booking.objects.filter(driver__user=self.request.user)
+            .select_related(
+                "pickup_address", "dropoff_address", "customer", "driver", "quote"
+            )
+            .prefetch_related("quote__shipping_type", "quote__service_type")
+        )
 
         # Apply status filter if provided (from frontend statusParam)
         status_filter = self.request.query_params.get("status", "")
@@ -275,91 +298,311 @@ class DriverAssignedBookingViewSet(mixins.ListModelMixin, viewsets.GenericViewSe
         # Hybrid ordering: Annotate status priority (lower number = higher priority)
         qs = qs.annotate(
             status_priority=Case(
-                When(status=BookingStatus.ASSIGNED, then=0),      # Highest: New assignments
-                When(status=BookingStatus.PICKED_UP, then=1),     # Next: Ready to transit
-                When(status=BookingStatus.IN_TRANSIT, then=2),    # Active: In progress
-                When(status=BookingStatus.DELIVERED, then=3),     # Lower: Completed
-                When(status=BookingStatus.SCHEDULED, then=4),     # Upcoming or pending
-                default=5,                                        # Others (e.g., CANCELLED, FAILED) at bottom
-                output_field=IntegerField()
+                When(status=BookingStatus.ASSIGNED, then=0),  # Highest: New assignments
+                When(status=BookingStatus.PICKED_UP, then=1),  # Next: Ready to transit
+                When(status=BookingStatus.IN_TRANSIT, then=2),  # Active: In progress
+                When(status=BookingStatus.DELIVERED, then=3),  # Lower: Completed
+                When(status=BookingStatus.SCHEDULED, then=4),  # Upcoming or pending
+                default=5,  # Others (e.g., CANCELLED, FAILED) at bottom
+                output_field=IntegerField(),
             )
-        ).order_by('status_priority', '-updated_at')  # Status priority asc, then most recent updates first
+        ).order_by(
+            "status_priority", "-updated_at"
+        )  # Status priority asc, then most recent updates first
 
-        return qs
+        return qs.order_by("status_priority", "-updated_at")
+
+    # def list(self, request, *args, **kwargs):
+    #     # Rely on DRF's authentication and permission classes
+    #     return super().list(request, *args, **kwargs)
+
+    # @action(detail=False, methods=['get'], url_path='my-route')
+    # def my_route(self, request):
+    #     route = Route.objects.filter(driver=request.user.driver_profile, status='assigned').first()
+    #     return Response({'ordered_stops': route.ordered_stops})  # Next stop is [0]
+
+
+# class DriverRouteViewSet(viewsets.GenericViewSet):
+#     permission_classes = [IsDriver]
+
+#     @action(detail=False, methods=["get"], url_path="current-route")
+#     def current_route(self, request):
+#         """
+#         Primary endpoint for driver app.
+#         Returns current optimized route with bookings in STRICT VRP order.
+#         Falls back gracefully if no route.
+#         """
+#         driver = request.user.driver_profile
+#         if not driver:
+#             return Response(
+#                 {"detail": "No driver profile found"},
+#                 status=status.HTTP_400_BAD_REQUEST,
+#             )
+
+#         # Find active route (you can adjust status if needed)
+#         route = (
+#             Route.objects.filter(driver=driver, status="assigned")
+#             .select_related("hub")
+#             .order_by("-visible_at")
+#             .first()
+#         )
+
+#         if not route or not route.ordered_stops:
+#             # Fallback: return individual assigned bookings (not in route)
+#             fallback_bookings = Booking.objects.filter(
+#                 driver=driver,
+#                 status__in=[
+#                     BookingStatus.ASSIGNED,
+#                     BookingStatus.PICKED_UP,
+#                     BookingStatus.AT_HUB,
+#                 ],
+#             ).select_related("pickup_address", "dropoff_address")
+
+#             # Apply same status priority as your old view
+#             fallback_bookings = fallback_bookings.annotate(
+#                 status_priority=Case(
+#                     When(status=BookingStatus.ASSIGNED, then=0),
+#                     When(status=BookingStatus.PICKED_UP, then=1),
+#                     When(status=BookingStatus.AT_HUB, then=2),
+#                     default=3,
+#                     output_field=IntegerField(),
+#                 )
+#             ).order_by("status_priority", "-updated_at")
+
+#             serializer = BookingSerializer(fallback_bookings, many=True)
+#             return Response(
+#                 {
+#                     "route_id": None,
+#                     "hub_name": None,
+#                     "is_optimized_route": False,
+#                     "total_stops": len(serializer.data),
+#                     "ordered_bookings": serializer.data,
+#                     "message": "No optimized route active. Showing individual assignments.",
+#                 }
+#             )
+
+#         # === MAIN CASE: Optimized route exists ===
+#         ordered_bookings = route.ordered_bookings  # Use your property
+#         serializer = BookingSerializer(ordered_bookings, many=True)
+
+#         # Optional: detect current "next" stop
+#         next_stop_index = None
+#         for i, booking in enumerate(ordered_bookings):
+#             if booking.status in [BookingStatus.ASSIGNED, BookingStatus.PICKED_UP]:
+#                 next_stop_index = i
+#                 break
+
+#         return Response(
+#             {
+#                 "route_id": str(route.id),
+#                 "hub_name": route.hub.name if route.hub else "No Hub",
+#                 "is_optimized_route": True,
+#                 "total_distance_km": float(route.total_distance_km or 0),
+#                 "total_time_hours": float(route.total_time_hours or 0),
+#                 "total_stops": len(ordered_bookings),
+#                 "next_stop_index": next_stop_index,
+#                 "ordered_bookings": serializer.data,  # Strict VRP order
+#             }
+#         )
+
+
+class DriverRouteViewSet(viewsets.GenericViewSet):
+    permission_classes = [IsDriver]
+    pagination_class = PageNumberPagination
+
+    @action(detail=False, methods=["get"], url_path="current-route")
+    def current_route(self, request):
+        """
+        Unified endpoint for driver's current work: combines optimized routes (VRP) and manual assignments.
+        - If no status filter: Prioritizes active route (strict order), appends manual bookings.
+        - If status filter: Shows all bookings with that status (route or manual), ordered by priority.
+        Supports pagination for large lists.
+        """
+        driver = request.user.driver_profile
+        if not driver:
+            return Response(
+                {"detail": "No driver profile found"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Parse query params
+        page = int(request.query_params.get("page", 1))
+        page_size = int(request.query_params.get("page_size", 10))
+        status_filter = request.query_params.get("status", "")
 
         active_statuses = [
+            BookingStatus.AT_HUB,
             BookingStatus.ASSIGNED,
             BookingStatus.PICKED_UP,
             BookingStatus.IN_TRANSIT,
-            BookingStatus.DELIVERED
         ]
 
-        # Base queryset
-        queryset = Booking.objects.select_related(
-            "pickup_address", "dropoff_address", "customer", "driver", "quote"
-        ).prefetch_related(
-            "quote__shipping_type", "quote__service_type"
-        ).filter(status__in=active_statuses).order_by("-created_at")
+        if status_filter and status_filter != "all":
+            # Status-specific filter: all bookings with that status, ignoring route/manual distinction
+            qs = (
+                Booking.objects.filter(driver=driver, status=status_filter)
+                .select_related(
+                    "pickup_address", "dropoff_address", "customer", "driver", "quote"
+                )
+                .prefetch_related("quote__shipping_type", "quote__service_type")
+            )
 
-        # Apply status filter if provided
-        if status_param and status_param in BookingStatus.values:
-            queryset = queryset.filter(status=status_param)
-        else:
-            queryset = queryset.filter(status__in=active_statuses)
+            qs = qs.annotate(
+                status_priority=Case(
+                    When(status=BookingStatus.AT_HUB, then=0),
+                    When(status=BookingStatus.ASSIGNED, then=1),
+                    When(status=BookingStatus.PICKED_UP, then=2),
+                    When(status=BookingStatus.IN_TRANSIT, then=3),
+                    default=4,
+                    output_field=IntegerField(),
+                )
+            ).order_by("status_priority", "-updated_at")
 
-        # If driver_id is provided and user is admin
-        if driver_id and hasattr(user, "role") and user.role == "admin":
-            try:
-                # Validate driver_id as UUID
-                uuid.UUID(driver_id)
-                queryset = queryset.filter(driver_id=driver_id)
-            except ValueError:
-                return Booking.objects.none()  # Invalid driver_id
-        # For non-admin drivers, restrict to their own bookings
-        elif hasattr(user, "driver_profile"):
-            queryset = queryset.filter(driver=user.driver_profile)
-        else:
-            return Booking.objects.none()  # No driver profile or not admin
+            paginator = self.pagination_class()
+            paginator.page_size = page_size
+            result_page = paginator.paginate_queryset(qs, request)
+            serializer = BookingSerializer(result_page, many=True)
 
-        return queryset
+            return Response(
+                {
+                    "ordered_bookings": serializer.data,
+                    "count": paginator.page.paginator.count,
+                    "is_optimized_route": False,
+                    "route_id": None,
+                    "hub_name": driver.hub.name if driver.hub else None,
+                    "total_distance_km": 0,
+                    "total_time_hours": 0,
+                    "total_stops": paginator.page.paginator.count,
+                    "next_stop_index": None,
+                    "message": f"Showing bookings with status: {status_filter}",
+                }
+            )
 
-    def list(self, request, *args, **kwargs):
-        # Rely on DRF's authentication and permission classes
-        return super().list(request, *args, **kwargs)
-    
-    @action(detail=False, methods=['get'], url_path='my-route')
-    def my_route(self, request):
-        route = Route.objects.filter(driver=request.user.driver_profile, status='assigned').first()
-        return Response({'ordered_stops': route.ordered_stops})  # Next stop is [0]
+        # No status filter: Unified current work (route + manuals)
+        route = (
+            Route.objects.filter(driver=driver, status="assigned")
+            .select_related("hub")
+            .order_by("-visible_at")
+            .first()
+        )
+
+        route_bookings = []
+        if route and route.ordered_stops:
+            route_bookings = [
+                b for b in route.ordered_bookings if b.status in active_statuses
+            ]
+
+        individual_qs = (
+            Booking.objects.filter(
+                driver=driver, route__isnull=True, status__in=active_statuses
+            )
+            .select_related(
+                "pickup_address", "dropoff_address", "customer", "driver", "quote"
+            )
+            .prefetch_related("quote__shipping_type", "quote__service_type")
+        )
+
+        individual_qs = individual_qs.annotate(
+            status_priority=Case(
+                When(status=BookingStatus.AT_HUB, then=0),
+                When(status=BookingStatus.ASSIGNED, then=1),
+                When(status=BookingStatus.PICKED_UP, then=2),
+                When(status=BookingStatus.IN_TRANSIT, then=3),
+                default=4,
+                output_field=IntegerField(),
+            )
+        ).order_by("status_priority", "-updated_at")
+
+        individual_bookings = list(individual_qs)
+
+        combined_bookings = route_bookings + individual_bookings
+        total_count = len(combined_bookings)
+
+        # Manual pagination (since mixed list + queryset)
+        start = (page - 1) * page_size
+        end = min(start + page_size, total_count)
+        paged_bookings = combined_bookings[start:end]
+
+        serializer = BookingSerializer(paged_bookings, many=True)
+
+        # Calculate next_stop_index (on full route if exists)
+        next_stop_index = None
+        if route:
+            for i, booking in enumerate(route_bookings):
+                if booking.status in [
+                    BookingStatus.AT_HUB,
+                    BookingStatus.ASSIGNED,
+                    BookingStatus.PICKED_UP,
+                ]:
+                    next_stop_index = i
+                    break
+
+        message = (
+            "Active optimized route and additional manual assignments."
+            if route and individual_bookings
+            else (
+                "Active optimized route." if route else "Individual manual assignments."
+            )
+        )
+
+        return Response(
+            {
+                "ordered_bookings": serializer.data,
+                "count": total_count,
+                "is_optimized_route": bool(route),
+                "route_id": str(route.id) if route else None,
+                "hub_name": (
+                    route.hub.name if route else driver.hub.name if driver.hub else None
+                ),
+                "total_distance_km": (
+                    float(route.total_distance_km or 0) if route else 0
+                ),
+                "total_time_hours": float(route.total_time_hours or 0) if route else 0,
+                "total_stops": total_count,
+                "next_stop_index": next_stop_index,
+                "message": message,
+            }
+        )
+
 
 class DriverShiftViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = DriverShiftSerializer  # New serializer
+
     def get_queryset(self):
-        return DriverShift.objects.filter(driver=self.request.user.driver_profile, start_time__date=timezone.now().date())
-    
-    @action(detail=True, methods=['post'], permission_classes=[IsAdminUser])
+        return DriverShift.objects.filter(
+            driver=self.request.user.driver_profile,
+            start_time__date=timezone.now().date(),
+        )
+
+    @action(detail=True, methods=["post"], permission_classes=[IsAdminUser])
     def assign_driver(self, request, pk=None):
         shift = self.get_object()
         if shift.status != DriverShift.Status.PENDING:
             return Response({"error": "Shift not pending"}, status=400)
-        
-        driver_id = request.data.get('driver_id')
+
+        driver_id = request.data.get("driver_id")
         try:
             driver = DriverProfile.objects.get(id=driver_id)
-            if DriverShift.objects.filter(driver=driver, status__in=[DriverShift.Status.ASSIGNED, DriverShift.Status.ACTIVE]).exists():
+            if DriverShift.objects.filter(
+                driver=driver,
+                status__in=[DriverShift.Status.ASSIGNED, DriverShift.Status.ACTIVE],
+            ).exists():
                 return Response({"error": "Driver has open shift"}, status=400)
-            
+
             shift.driver = driver
             shift.status = DriverShift.Status.ASSIGNED
             shift.save()
-            
+
             # Update associated routes/bookings
             Route.objects.filter(shift=shift).update(driver=driver)
-            Booking.objects.filter(route__shift=shift).update(driver=driver, status=BookingStatus.ASSIGNED)
-            
+            Booking.objects.filter(route__shift=shift).update(
+                driver=driver, status=BookingStatus.ASSIGNED
+            )
+
             return Response(DriverShiftSerializer(shift).data)
         except DriverProfile.DoesNotExist:
             return Response({"error": "Driver not found"}, status=404)
+
 
 class DriverMetricsView(APIView):
     permission_classes = [IsDriver]
@@ -372,35 +615,75 @@ class DriverMetricsView(APIView):
                 schema=openapi.Schema(
                     type=openapi.TYPE_OBJECT,
                     properties={
-                        "total_deliveries": openapi.Schema(type=openapi.TYPE_INTEGER, description="Total number of successful deliveries"),
-                        "failed_jobs": openapi.Schema(type=openapi.TYPE_INTEGER, description="Total number of failed deliveries"),
-                        "active_jobs": openapi.Schema(type=openapi.TYPE_INTEGER, description="Total number of active jobs (assigned, picked up, or in transit)"),
-                        "total_jobs": openapi.Schema(type=openapi.TYPE_INTEGER, description="Total number of assigned jobs"),
-                        "completed_today": openapi.Schema(type=openapi.TYPE_INTEGER, description="Number of deliveries completed today"),
-                        "completed_week": openapi.Schema(type=openapi.TYPE_INTEGER, description="Number of deliveries completed this week"),
-                        "completed_month": openapi.Schema(type=openapi.TYPE_INTEGER, description="Number of deliveries completed this month"),
-                        "completion_rate": openapi.Schema(type=openapi.TYPE_NUMBER, description="Percentage of successful deliveries out of successful plus failed deliveries"),
-                        "average_rating": openapi.Schema(type=openapi.TYPE_NUMBER, description="Average rating of the driver"),
+                        "total_deliveries": openapi.Schema(
+                            type=openapi.TYPE_INTEGER,
+                            description="Total number of successful deliveries",
+                        ),
+                        "failed_jobs": openapi.Schema(
+                            type=openapi.TYPE_INTEGER,
+                            description="Total number of failed deliveries",
+                        ),
+                        "active_jobs": openapi.Schema(
+                            type=openapi.TYPE_INTEGER,
+                            description="Total number of active jobs (assigned, picked up, or in transit)",
+                        ),
+                        "total_jobs": openapi.Schema(
+                            type=openapi.TYPE_INTEGER,
+                            description="Total number of assigned jobs",
+                        ),
+                        "completed_today": openapi.Schema(
+                            type=openapi.TYPE_INTEGER,
+                            description="Number of deliveries completed today",
+                        ),
+                        "completed_week": openapi.Schema(
+                            type=openapi.TYPE_INTEGER,
+                            description="Number of deliveries completed this week",
+                        ),
+                        "completed_month": openapi.Schema(
+                            type=openapi.TYPE_INTEGER,
+                            description="Number of deliveries completed this month",
+                        ),
+                        "completion_rate": openapi.Schema(
+                            type=openapi.TYPE_NUMBER,
+                            description="Percentage of successful deliveries out of successful plus failed deliveries",
+                        ),
+                        "average_rating": openapi.Schema(
+                            type=openapi.TYPE_NUMBER,
+                            description="Average rating of the driver",
+                        ),
                     },
-                    required=["total_deliveries", "failed_jobs", "active_jobs", "total_jobs", "completed_today",
-                              "completed_week", "completed_month", "completion_rate", "average_rating"]
-                )
+                    required=[
+                        "total_deliveries",
+                        "failed_jobs",
+                        "active_jobs",
+                        "total_jobs",
+                        "completed_today",
+                        "completed_week",
+                        "completed_month",
+                        "completion_rate",
+                        "average_rating",
+                    ],
+                ),
             ),
             400: openapi.Response(
                 description="Bad request, no driver profile found",
                 schema=openapi.Schema(
                     type=openapi.TYPE_OBJECT,
                     properties={
-                        "detail": openapi.Schema(type=openapi.TYPE_STRING, description="Error message")
-                    }
-                )
-            )
+                        "detail": openapi.Schema(
+                            type=openapi.TYPE_STRING, description="Error message"
+                        )
+                    },
+                ),
+            ),
         },
     )
     def get(self, request):
         driver = getattr(request.user, "driver_profile", None)
         if not driver:
-            return Response({"detail": "No driver profile"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"detail": "No driver profile"}, status=status.HTTP_400_BAD_REQUEST
+            )
 
         now = timezone.now()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -410,8 +693,11 @@ class DriverMetricsView(APIView):
         bookings = Booking.objects.filter(driver=driver)
         delivered = bookings.filter(status=BookingStatus.DELIVERED)
         failed = bookings.filter(status=BookingStatus.FAILED)
-        active_statuses = [BookingStatus.ASSIGNED,
-                           BookingStatus.PICKED_UP, BookingStatus.IN_TRANSIT]
+        active_statuses = [
+            BookingStatus.ASSIGNED,
+            BookingStatus.PICKED_UP,
+            BookingStatus.IN_TRANSIT,
+        ]
         active = bookings.filter(status__in=active_statuses)
 
         total_deliveries = delivered.count()  # Successful jobs (delivered)
@@ -421,12 +707,19 @@ class DriverMetricsView(APIView):
 
         # Completion rate considering failed jobs: successful / (successful + failed)
         successful_plus_failed = total_deliveries + failed_jobs
-        completion_rate = round(
-            (total_deliveries / successful_plus_failed * 100), 2) if successful_plus_failed > 0 else 0.0
+        completion_rate = (
+            round((total_deliveries / successful_plus_failed * 100), 2)
+            if successful_plus_failed > 0
+            else 0.0
+        )
 
         # Average rating
-        avg_rating = DriverRating.objects.filter(
-            driver_profile=driver).aggregate(avg=Avg("rating"))["avg"] or 0.0
+        avg_rating = (
+            DriverRating.objects.filter(driver_profile=driver).aggregate(
+                avg=Avg("rating")
+            )["avg"]
+            or 0.0
+        )
 
         data = {
             "total_deliveries": total_deliveries,
