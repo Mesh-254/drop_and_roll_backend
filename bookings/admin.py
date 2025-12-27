@@ -441,7 +441,7 @@ class RouteAdmin(ModelAdmin):
                     route.hub = driver.hub if not route.hub else route.hub  # Set hub if not set
                     route.status = 'assigned'
                     route.save()
-                    route.bookings.update(driver=driver, hub=route.hub, status='assigned')
+                    route.bookings.update(driver=driver, hub=route.hub)
                 self.message_user(request, "Drivers assigned successfully.", level=messages.SUCCESS)
             except Exception as e:
                 self.message_user(request, f"Error: {e}", level=messages.ERROR)
