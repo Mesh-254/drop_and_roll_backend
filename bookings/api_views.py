@@ -307,7 +307,7 @@ class BookingViewSet(viewsets.ModelViewSet):
         if not driver_id:
             return Response({"detail": "driver_profile_id required"}, status=400)
         booking.driver_id = driver_id
-        booking.status = BookingStatus.ASSIGNED
+        # booking.status = BookingStatus.ASSIGNED
         booking.save(update_fields=["driver_id", "status", "updated_at"])
         return Response(BookingSerializer(booking).data)
 
@@ -767,12 +767,19 @@ class RouteViewSet(viewsets.ModelViewSet):
                 )
                 route.shift.save(update_fields=['driver', 'status', 'current_load'])
 
+            # Update bookings — IMPORTANT PART
+            booking_status = (
+                BookingStatus.ASSIGNED if route.leg_type == 'pickup' else
+                BookingStatus.IN_TRANSIT if route.leg_type == 'delivery' else
+                BookingStatus.ASSIGNED  # fallback
+            )
+
             # 8. Update bookings (existing; uses driver.hub for hub update).
             updated = route.bookings.update(
                 driver=driver,
-                status=BookingStatus.ASSIGNED,
                 hub=driver.hub,  # Use driver.hub since shift has no hub
-                updated_at=timezone.now()
+                updated_at=timezone.now(),
+                status=booking_status
             )
 
             # NEW: Re-save route to trigger validation in Route.save() (post-assignment).
@@ -791,5 +798,6 @@ class RouteViewSet(viewsets.ModelViewSet):
             "route_id": str(route.id),
             "driver": driver.user.get_full_name(),
             "bookings_updated": updated,
+            "new_booking_status": booking_status,
             "shift_assigned": route.shift.driver_id is not None if route.shift else False
         })
