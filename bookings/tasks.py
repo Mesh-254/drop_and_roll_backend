@@ -128,7 +128,7 @@ SERVICE_TYPE_TO_BUCKET = {
     'Budget': 'three_day',
 }
 
-MIN_ROUTE_HOURS = 4.0
+MIN_ROUTE_HOURS = 2
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
 def optimize_bookings(self):
@@ -160,7 +160,7 @@ def optimize_bookings(self):
     )
 
     delivery_candidates = Booking.objects.filter(
-        ~Exists(Route.objects.filter(bookings=OuterRef('pk'))),  # positional first
+        ~Exists(Route.objects.filter(bookings=OuterRef('pk'), leg_type='delivery')),  # FIXED: Not in a DELIVERY route (can be in pickup)
         status=BookingStatus.AT_HUB,
         pickup_address__latitude__isnull=False,
         dropoff_address__latitude__isnull=False,
@@ -323,7 +323,7 @@ def optimize_bookings(self):
                         Booking.objects.filter(id__in=[b.id for b in ordered]).update(
                             hub=hub,
                             driver=driver,
-                            status=BookingStatus.ASSIGNED,
+                            status=BookingStatus.ASSIGNED, # Explicit for pickup
                             updated_at=now
                         )
 
@@ -337,7 +337,7 @@ def optimize_bookings(self):
             deliveries = bucketed_deliveries[bucket]
             if deliveries:
                 time_matrix, distance_matrix = get_time_matrix([b.dropoff_address for b in deliveries], hub_lat, hub_lng)
-                drivers = DriverProfile.objects.filter(hub=hub).filter(availability__available=True).order_by('-shift__remaining_hours')
+                drivers = DriverProfile.objects.filter(hub=hub).filter(availability__available=True).select_related('user', 'availability')
                 routes = optimize_routes(deliveries, hub_lat, hub_lng, time_matrix, distance_matrix, drivers, leg_type='delivery')
 
                 # Line-by-line for deliveries (mirror of pickups, with leg_type='delivery' and status updates adjusted)
@@ -350,7 +350,7 @@ def optimize_bookings(self):
                         {
                             'booking_id': str(b.id),
                             'address': {'lat': float(b.dropoff_address.latitude), 'lng': float(b.dropoff_address.longitude)},
-                            'eta': eta
+                            'eta': eta.isoformat() if eta else None
                         } for b, eta in zip(ordered, etas)
                     ]
 
