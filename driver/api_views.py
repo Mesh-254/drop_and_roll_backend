@@ -431,8 +431,8 @@ class DriverRouteViewSet(viewsets.GenericViewSet):
         status_filter = request.query_params.get("status", "")
 
         active_statuses = [
-            BookingStatus.AT_HUB,
             BookingStatus.ASSIGNED,
+            BookingStatus.AT_HUB,
             BookingStatus.PICKED_UP,
             BookingStatus.IN_TRANSIT,
         ]
@@ -480,9 +480,9 @@ class DriverRouteViewSet(viewsets.GenericViewSet):
 
         # No status filter: Unified current work (route + manuals)
         route = (
-            Route.objects.filter(driver=driver, status="assigned")
+            Route.objects.filter(driver=driver, status__in=['assigned', 'in_progress'])
             .select_related("hub")
-            .order_by("-visible_at")
+            .order_by('-visible_at')
             .first()
         )
 
@@ -596,7 +596,7 @@ class DriverShiftViewSet(viewsets.ReadOnlyModelViewSet):
             # Update associated routes/bookings
             Route.objects.filter(shift=shift).update(driver=driver)
             Booking.objects.filter(route__shift=shift).update(
-                driver=driver, status=BookingStatus.ASSIGNED
+                driver=driver
             )
 
             return Response(DriverShiftSerializer(shift).data)
