@@ -589,7 +589,7 @@ class Route(models.Model):
         missing_qs = self.bookings.exclude(id__in=uuid_ids)
         return list(ordered_qs) + list(missing_qs)
 
-    # update the Route model as per booking statuses
+    # update_status method in your Route model
     def update_status(self):
         if not self.bookings.exists():
             self.status = "pending"
@@ -598,27 +598,41 @@ class Route(models.Model):
 
         statuses = set(self.bookings.values_list("status", flat=True))
 
-        # Determine completed status based on leg_type
+        # Define leg_type-specific statuses
         if self.leg_type == "pickup":
-            completed_status = BookingStatus.AT_HUB
-        else:  # delivery
-            completed_status = BookingStatus.DELIVERED
-
-        # Allow cancelled/failed/refunded as "complete" for the purpose of route completion
-        if all(
-            s
-            in [
-                completed_status,
-                BookingStatus.CANCELLED,
-                BookingStatus.FAILED,
+            progress_statuses = [BookingStatus.PICKED_UP]
+            completed_statuses = [
+                BookingStatus.AT_HUB,
+                BookingStatus.IN_TRANSIT,
+                BookingStatus.DELIVERED,
                 BookingStatus.REFUNDED,
             ]
+            completed_status = BookingStatus.AT_HUB  # For logging/reference only
+        elif self.leg_type == "delivery":
+            progress_statuses = [BookingStatus.IN_TRANSIT]
+            completed_statuses = [
+                BookingStatus.DELIVERED,
+                BookingStatus.REFUNDED,
+            ]
+            completed_status = BookingStatus.DELIVERED  # For logging/reference only
+        else:
+            # Fallback for other leg_types (if any)
+            progress_statuses = [BookingStatus.PICKED_UP, BookingStatus.IN_TRANSIT]
+            completed_statuses = [BookingStatus.DELIVERED, BookingStatus.REFUNDED]
+            completed_status = BookingStatus.DELIVERED
+
+        # Allow cancelled/failed as "complete" for the purpose of route completion
+        terminal_statuses = [
+            BookingStatus.CANCELLED,
+            BookingStatus.FAILED,
+        ]
+
+        if all(
+            s in completed_statuses + terminal_statuses
             for s in statuses
         ):
             self.status = "completed"
-        elif any(
-            s in [BookingStatus.PICKED_UP, BookingStatus.IN_TRANSIT] for s in statuses
-        ):
+        elif any(s in progress_statuses for s in statuses):
             self.status = "in_progress"
         else:
             self.status = "assigned"
