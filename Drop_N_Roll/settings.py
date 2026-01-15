@@ -41,28 +41,30 @@ ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS").split(",")
 # Application definition
 
 INSTALLED_APPS = [
-    "unfold",
-    "django.contrib.admin",
-    "django.contrib.auth",
-    "django.contrib.contenttypes",
-    "django.contrib.sessions",
-    "django.contrib.messages",
-    "django.contrib.staticfiles",
-    "drf_yasg",
-    "rest_framework",
-    "rest_framework_simplejwt",
-    "rest_framework_simplejwt.token_blacklist",
-    "django_seed",
-    "bookings.apps.BookingsConfig",
-    "users.apps.UsersConfig",
-    "tracking.apps.TrackingConfig",
-    "driver.apps.DriverConfig",
-    "payments.apps.PaymentsConfig",
-    "business.apps.BusinessConfig",
-    "support.apps.SupportConfig",
-    "celery",
-    "corsheaders",
-    "social_django",
+    'unfold',
+    'django.contrib.admin',
+    'django.contrib.auth',
+    'django.contrib.contenttypes',
+    'django.contrib.sessions',
+    'django.contrib.messages',
+    'django.contrib.staticfiles',
+    'drf_yasg',
+    'rest_framework',
+    'rest_framework_simplejwt',
+    'rest_framework_simplejwt.token_blacklist',
+    'django_seed',
+
+    'bookings.apps.BookingsConfig',
+    'users.apps.UsersConfig',
+    'tracking.apps.TrackingConfig',
+    'driver.apps.DriverConfig',
+    'payments.apps.PaymentsConfig',
+    'business.apps.BusinessConfig',
+
+    'celery',
+    'corsheaders',
+    'social_django',
+
 ]
 
 MIDDLEWARE = [
@@ -553,36 +555,10 @@ UNFOLD = {
                     },
                 ],
             },
-            # SUPPORT SECTION
-            {
-                "title": _("Support"),
-                "icon": "support_agent",  # Material Icon for support
-                "link": "",  # Non-clickable parent
-                "separator": True,
-                "collapsible": True,
-                "items": [
-                    {
-                        "title": _("Open Tickets"),
-                        "icon": "list_alt",
-                        "link": reverse_lazy("admin:support_ticket_changelist"),
-                        "permission": lambda request: request.user.is_superuser,
-                    },
-                    {
-                        "title": _("All Tickets"),
-                        "icon": "list",
-                        "link": reverse_lazy("admin:support_ticket_changelist"),
-                        "permission": lambda request: request.user.is_superuser,
-                    },
-                    # {
-                    #     "title": _("Ticket Types"),
-                    #     "icon": "category",
-                    #     "link": reverse_lazy("admin:support_tickettype_changelist"),
-                    #     "permission": lambda request: request.user.is_superuser,
-                    # },
-                ],
-            },
         ],
+
     },
+
     # "TABS": [
     #     {
     #         "models": [
@@ -617,3 +593,11 @@ def badge_callback(request):
 
 SITE_URL = env("SITE_URL", default="http://127.0.0.1:8000")
 FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:5173")
+
+QR_CODE_CACHE_ALIAS = "default"
+QR_CODE_URL_PROTECTION = {
+    'TOKEN_LENGTH': 30,
+    'SIGNING_SALT': 'jdf$#%$FDGF$#T$lkvjgjegndfkj',
+    'SIGNING_SALT_LENGTH': 12,
+    'ALLOWS_EXTERNAL_REQUESTS_FOR_REGISTERED_USER': True,
+}

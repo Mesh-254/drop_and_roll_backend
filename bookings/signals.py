@@ -58,3 +58,13 @@ def update_on_route_assignment(sender, instance, **kwargs):
             f"Route {route.id} assigned to {route.driver.user.get_full_name()}. "
             f"Updated shift {route.shift.id if route.shift else 'None'} and {updated} bookings."
         )
+# bookings/signals.py
+from django.db.models.signals import post_save, post_delete
+from django.dispatch import receiver
+from .models import PricingRule
+from django.core.cache import cache
+
+
+@receiver([post_save, post_delete], sender=PricingRule)
+def clear_pricing_cache(sender, **kwargs):
+    cache.delete("pricing_rules")

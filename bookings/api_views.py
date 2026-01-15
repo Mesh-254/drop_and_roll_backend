@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+from django.http import HttpResponse
 from drf_yasg import openapi  # type: ignore
 from drf_yasg.utils import swagger_auto_schema
 from driver.models import DriverProfile, DriverShift
@@ -17,6 +18,8 @@ from django.db import transaction  # type: ignore
 import logging  # type: ignore
 from driver.permissions import IsDriver  # type: ignore
 from tracking.models import ProofOfDelivery
+from qr_code.qrcode.utils import ContactDetail, WifiConfig   # not needed here, just showing imports
+from qr_code.qrcode.makers import make_qr
 
 
 import uuid
@@ -801,3 +804,34 @@ class RouteViewSet(viewsets.ModelViewSet):
             "new_booking_status": booking_status,
             "shift_assigned": route.shift.driver_id is not None if route.shift else False
         })
+
+# class BookingQRCodeView(APIView):
+#     def get(self, request, pk):
+#         booking = get_object_or_404(Booking, pk=pk)
+#         qr_image = make_qr(booking.get_qr_content(), size="L", error_correction="H")
+#
+#         response = HttpResponse(content_type="image/png")
+#         qr_image.save(response, "PNG")
+#         return response
+
+def booking_qr_code(request, pk):
+    booking = get_object_or_404(Booking, pk=pk)
+    qr_content = booking.get_qr_content()
+
+    size = request.GET.get('size', 'M')  # M, L, H, 200x200, 6cm...
+    format = request.GET.get('format', 'png')  # 'png' or 'svg'
+
+    qr_image = make_qr(
+        qr_content,
+        size=size,
+        error_correction="H",
+        image_format=format.upper(),  # PNG or SVG
+    )
+
+    content_type = "image/svg+xml" if format == "svg" else "image/png"
+    extension = "svg" if format == "svg" else "png"
+
+    response = HttpResponse(content_type=content_type)
+    qr_image.save(response, extension.upper())
+
+    return response

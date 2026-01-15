@@ -7,3 +7,4 @@ class BookingsConfig(AppConfig):
 
     def ready(self):
         import bookings.signals  # noqa: F401  # Connects the signals
+        import bookings.signals

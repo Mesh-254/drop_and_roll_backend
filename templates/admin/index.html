@@ -41,6 +41,44 @@
                 {{ error }}
             </div>
         {% else %}
+
+            {% if date_error %}
+    <div class="bg-red-50 border-l-4 border-red-500 text-red-700 p-4 mb-6 rounded-md" role="alert">
+        {{ date_error }}
+    </div>
+{% endif %}
+
+<div class="mb-8 bg-white shadow-md rounded-lg p-6">
+    <h3 class="text-xl font-semibold text-gray-800 mb-4">Date Range Filter (optional – leave blank for all-time totals)</h3>
+    <form method="get" class="flex flex-wrap gap-4 items-end">
+        <div>
+            <label class="block text-sm font-medium text-gray-700">From</label>
+            <input type="date" name="from_date" value="{{ date_from }}" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm">
+        </div>
+        <div>
+            <label class="block text-sm font-medium text-gray-700">To</label>
+            <input type="date" name="to_date" value="{{ date_to }}" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm">
+        </div>
+        <div>
+            <button type="submit" class="px-6 py-2 bg-primary-600 text-white font-medium rounded-md hover:bg-primary-700 transition">
+                Apply
+            </button>
+        </div>
+        <div>
+            <a href="{% url 'admin:index' %}" class="px-6 py-2 bg-gray-300 text-gray-700 font-medium rounded-md hover:bg-gray-400 transition">
+                Clear
+            </a>
+        </div>
+    </form>
+    <p class="text-sm text-gray-500 mt-3">
+        {% if date_from or date_to %}
+            Currently showing data{% if date_from %} from <strong>{{ date_from }}</strong>{% endif %}{% if date_to %} to <strong>{{ date_to }}</strong>{% endif %}
+        {% else %}
+            Showing all-time totals • Charts display the last 30 days
+        {% endif %}
+    </p>
+</div>
+
             <!-- KPI Cards Section -->
             <h2 class="text-2xl font-bold text-gray-800 mb-4">Key Metrics</h2>
             <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
