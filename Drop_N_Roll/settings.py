@@ -52,6 +52,7 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt',
     'rest_framework_simplejwt.token_blacklist',
     'django_seed',
+    'qr_code',
 
     'bookings.apps.BookingsConfig',
     'users.apps.UsersConfig',
@@ -577,3 +578,11 @@ def badge_callback(request):
 
 SITE_URL = env("SITE_URL", default='http://127.0.0.1:8000')
 FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:5173")
+
+QR_CODE_CACHE_ALIAS = "default"
+QR_CODE_URL_PROTECTION = {
+    'TOKEN_LENGTH': 30,
+    'SIGNING_SALT': 'jdf$#%$FDGF$#T$lkvjgjegndfkj',
+    'SIGNING_SALT_LENGTH': 12,
+    'ALLOWS_EXTERNAL_REQUESTS_FOR_REGISTERED_USER': True,
+}

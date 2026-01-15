@@ -221,6 +221,19 @@ class Booking(models.Model):
     def __str__(self):
         return f"Booking {self.id} — {self.status}"
 
+    def get_tracking_url(self):
+        """Full absolute URL for tracking/verification"""
+        base = getattr(settings, 'SITE_BASE_URL', 'http://localhost:8000')
+        # Option 1: Use UUID (recommended - secure & unique)
+        return f"{base}/bookings/track/{self.id}/"
+
+        # Option 2: If you prefer tracking_number (once it's always set)
+        # return f"{base}/track/?tn={self.tracking_number}"
+
+    def get_qr_content(self):
+        """What the QR code actually encodes - just the full URL"""
+        return self.get_tracking_url()
+
 
 class RecurrencePeriod(models.TextChoices):
     WEEKLY = "weekly", "Weekly"
