@@ -13,13 +13,14 @@ from rest_framework.views import APIView
 from rest_framework import serializers
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
-from django.db.models import Avg
+from django.db.models import Avg, OuterRef, Subquery
 from rest_framework.permissions import IsAdminUser
 from django.db import transaction
 from rest_framework.parsers import MultiPartParser, FormParser
 from django.db.models import Case, When, IntegerField
 
 from bookings.models import Booking, BookingStatus, Route
+from bookings.serializers import RouteSerializer
 from bookings.serializers import BookingSerializer
 from driver.models import (
     DriverAvailability,
@@ -28,9 +29,12 @@ from driver.models import (
     DriverDocument,
     DriverShift,
     DriverProfile,
+    DriverDocument,
+    DriverLocation,
 )
 from driver.serializers import (
     DriverAvailabilitySerializer,
+    DriverLocationCreateSerializer,
     DriverPayoutSerializer,
     DriverPayoutCreateSerializer,
     DriverRatingSerializer,
@@ -39,22 +43,51 @@ from driver.serializers import (
     DriverInviteDetailSerializer,
     DriverInviteAcceptSerializer,
     DriverShiftSerializer,
+    DriverLocationSerializer,
 )
 from users.serializers import UserSerializer
 from .permissions import IsAdmin, IsDriver, IsCustomer
+from datetime import timedelta
 
 
 class DriverAvailabilityViewSet(
     mixins.CreateModelMixin, mixins.ListModelMixin, viewsets.GenericViewSet
 ):
+    queryset = DriverAvailability.objects.all()
     serializer_class = DriverAvailabilitySerializer
+    permission_classes = [IsAuthenticated]
 
     def get_permissions(self):
-        if self.action in ["list"]:
-            return [IsDriver()]
-        if self.action in ["create", "list", "update", "partial_update", "destroy"]:
-            return [IsAdmin()]
+        if self.action in ["list", "retrieve"]:
+            return [IsAdmin()]  # Admins view all
+        elif self.action in ["update", "partial_update", "me"]:
+            return [IsDriver()]  # Drivers update own
         return super().get_permissions()
+
+    # NEW: Action for driver's own availability
+    @action(detail=False, methods=["get", "patch"], url_path="me")
+    def me(self, request):
+        try:
+            availability = DriverAvailability.objects.get(
+                driver_profile__user=request.user
+            )
+        except DriverAvailability.DoesNotExist:
+            return Response(
+                {"error": "Availability not found"}, status=status.HTTP_404_NOT_FOUND
+            )
+
+        if request.method == "GET":
+            serializer = self.get_serializer(availability)
+            return Response(serializer.data)
+
+        elif request.method == "PATCH":
+            serializer = self.get_serializer(
+                availability, data=request.data, partial=True
+            )
+            if serializer.is_valid():
+                serializer.save()
+                return Response(serializer.data)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def get_queryset(self):
         if getattr(self, "swagger_fake_view", False):
@@ -418,18 +451,18 @@ class DriverRouteViewSet(viewsets.GenericViewSet):
         - If status filter: Shows all bookings with that status (route or manual), ordered by priority.
         Supports pagination for large lists.
         """
-        driver = request.user.driver_profile
+        driver = DriverProfile.objects.select_related("hub", "hub__address").get(
+            user=request.user
+        )
         if not driver:
             return Response(
                 {"detail": "No driver profile found"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
         # Parse query params
         page = int(request.query_params.get("page", 1))
         page_size = int(request.query_params.get("page_size", 10))
         status_filter = request.query_params.get("status", "")
-
         active_statuses = [
             BookingStatus.ASSIGNED,
             BookingStatus.AT_HUB,
@@ -437,60 +470,119 @@ class DriverRouteViewSet(viewsets.GenericViewSet):
             BookingStatus.IN_TRANSIT,
         ]
 
-        if status_filter and status_filter != "all":
-            # Status-specific filter: all bookings with that status, ignoring route/manual distinction
-            qs = (
-                Booking.objects.filter(driver=driver, status=status_filter)
-                .select_related(
-                    "pickup_address", "dropoff_address", "customer", "driver", "quote"
+        if status_filter:
+            if status_filter == "all":
+                # Show all bookings except delivered, ordered by priority
+                qs = (
+                    Booking.objects.filter(driver=driver)
+                    .exclude(status=BookingStatus.DELIVERED)
+                    .select_related(
+                        "pickup_address",
+                        "dropoff_address",
+                        "customer",
+                        "driver",
+                        "quote",
+                    )
+                    .prefetch_related("quote__shipping_type", "quote__service_type")
                 )
-                .prefetch_related("quote__shipping_type", "quote__service_type")
-            )
-
-            qs = qs.annotate(
-                status_priority=Case(
-                    When(status=BookingStatus.AT_HUB, then=0),
-                    When(status=BookingStatus.ASSIGNED, then=1),
-                    When(status=BookingStatus.PICKED_UP, then=2),
-                    When(status=BookingStatus.IN_TRANSIT, then=3),
-                    default=4,
-                    output_field=IntegerField(),
+                qs = qs.annotate(
+                    status_priority=Case(
+                        When(status=BookingStatus.AT_HUB, then=0),
+                        When(status=BookingStatus.ASSIGNED, then=1),
+                        When(status=BookingStatus.PICKED_UP, then=2),
+                        When(status=BookingStatus.IN_TRANSIT, then=3),
+                        default=4,
+                        output_field=IntegerField(),
+                    )
+                ).order_by("status_priority", "-updated_at")
+                paginator = self.pagination_class()
+                paginator.page_size = page_size
+                result_page = paginator.paginate_queryset(qs, request)
+                serializer = BookingSerializer(result_page, many=True)
+                return Response(
+                    {
+                        "ordered_bookings": serializer.data,
+                        "count": paginator.page.paginator.count,
+                        "is_optimized_route": False,
+                        "route_id": None,
+                        "hub_name": driver.hub.name if driver.hub else None,
+                        "total_distance_km": 0,
+                        "total_time_hours": 0,
+                        "total_stops": paginator.page.paginator.count,
+                        "next_stop_index": None,
+                        "message": "Showing all bookings except delivered",
+                    }
                 )
-            ).order_by("status_priority", "-updated_at")
-
-            paginator = self.pagination_class()
-            paginator.page_size = page_size
-            result_page = paginator.paginate_queryset(qs, request)
-            serializer = BookingSerializer(result_page, many=True)
-
-            return Response(
-                {
-                    "ordered_bookings": serializer.data,
-                    "count": paginator.page.paginator.count,
-                    "is_optimized_route": False,
-                    "route_id": None,
-                    "hub_name": driver.hub.name if driver.hub else None,
-                    "total_distance_km": 0,
-                    "total_time_hours": 0,
-                    "total_stops": paginator.page.paginator.count,
-                    "next_stop_index": None,
-                    "message": f"Showing bookings with status: {status_filter}",
-                }
-            )
-
+            else:
+                # Status-specific filter: all bookings with that status, ignoring route/manual distinction
+                qs = (
+                    Booking.objects.filter(driver=driver, status=status_filter)
+                    .select_related(
+                        "pickup_address",
+                        "dropoff_address",
+                        "customer",
+                        "driver",
+                        "quote",
+                    )
+                    .prefetch_related("quote__shipping_type", "quote__service_type")
+                )
+                qs = qs.annotate(
+                    status_priority=Case(
+                        When(status=BookingStatus.AT_HUB, then=0),
+                        When(status=BookingStatus.ASSIGNED, then=1),
+                        When(status=BookingStatus.PICKED_UP, then=2),
+                        When(status=BookingStatus.IN_TRANSIT, then=3),
+                        default=4,
+                        output_field=IntegerField(),
+                    )
+                ).order_by("status_priority", "-updated_at")
+                paginator = self.pagination_class()
+                paginator.page_size = page_size
+                result_page = paginator.paginate_queryset(qs, request)
+                serializer = BookingSerializer(result_page, many=True)
+                return Response(
+                    {
+                        "ordered_bookings": serializer.data,
+                        "count": paginator.page.paginator.count,
+                        "is_optimized_route": False,
+                        "route_id": None,
+                        "hub_name": driver.hub.name if driver.hub else None,
+                        "total_distance_km": 0,
+                        "total_time_hours": 0,
+                        "total_stops": paginator.page.paginator.count,
+                        "next_stop_index": None,
+                        "message": f"Showing bookings with status: {status_filter}",
+                    }
+                )
         # No status filter: Unified current work (route + manuals)
         route = (
-            Route.objects.filter(driver=driver, status__in=['assigned', 'in_progress'])
-            .select_related("hub")
-            .order_by('-visible_at')
+            Route.objects.filter(driver=driver, status__in=["assigned", "in_progress"])
+            .select_related("hub", "hub__address")
+            .order_by("-visible_at")
             .first()
         )
-
         route_bookings = []
         if route and route.ordered_stops:
-            route_bookings = [
+            unfiltered_active = [
                 b for b in route.ordered_bookings if b.status in active_statuses
             ]
+            filtered_bookings = []
+            for b in unfiltered_active:
+                is_pickup = (
+                    b.dropoff_address_id == route.hub.address_id
+                    if route.hub and route.hub.address
+                    else False
+                )
+                if b.status == BookingStatus.AT_HUB and is_pickup:
+                    continue
+                filtered_bookings.append(b)
+            route_bookings = filtered_bookings
+            # Check if all active bookings were hidden (all AT_HUB pickups) -> complete route
+            if not filtered_bookings and unfiltered_active:
+                route.status = "completed"
+                route.save()
+                route_bookings = []
+                route = None  # Treat as no route now
 
         individual_qs = (
             Booking.objects.filter(
@@ -501,7 +593,6 @@ class DriverRouteViewSet(viewsets.GenericViewSet):
             )
             .prefetch_related("quote__shipping_type", "quote__service_type")
         )
-
         individual_qs = individual_qs.annotate(
             status_priority=Case(
                 When(status=BookingStatus.AT_HUB, then=0),
@@ -512,19 +603,24 @@ class DriverRouteViewSet(viewsets.GenericViewSet):
                 output_field=IntegerField(),
             )
         ).order_by("status_priority", "-updated_at")
-
-        individual_bookings = list(individual_qs)
+        individual_bookings = []
+        for b in list(individual_qs):
+            is_pickup = (
+                b.dropoff_address_id == driver.hub.address_id
+                if driver.hub and driver.hub.address
+                else False
+            )
+            if b.status == BookingStatus.AT_HUB and is_pickup:
+                continue
+            individual_bookings.append(b)
 
         combined_bookings = route_bookings + individual_bookings
         total_count = len(combined_bookings)
-
         # Manual pagination (since mixed list + queryset)
         start = (page - 1) * page_size
         end = min(start + page_size, total_count)
         paged_bookings = combined_bookings[start:end]
-
         serializer = BookingSerializer(paged_bookings, many=True)
-
         # Calculate next_stop_index (on full route if exists)
         next_stop_index = None
         if route:
@@ -536,7 +632,6 @@ class DriverRouteViewSet(viewsets.GenericViewSet):
                 ]:
                     next_stop_index = i
                     break
-
         message = (
             "Active optimized route and additional manual assignments."
             if route and individual_bookings
@@ -544,7 +639,6 @@ class DriverRouteViewSet(viewsets.GenericViewSet):
                 "Active optimized route." if route else "Individual manual assignments."
             )
         )
-
         return Response(
             {
                 "ordered_bookings": serializer.data,
@@ -595,9 +689,7 @@ class DriverShiftViewSet(viewsets.ReadOnlyModelViewSet):
 
             # Update associated routes/bookings
             Route.objects.filter(shift=shift).update(driver=driver)
-            Booking.objects.filter(route__shift=shift).update(
-                driver=driver
-            )
+            Booking.objects.filter(route__shift=shift).update(driver=driver)
 
             return Response(DriverShiftSerializer(shift).data)
         except DriverProfile.DoesNotExist:
@@ -734,3 +826,150 @@ class DriverMetricsView(APIView):
         }
 
         return Response(data)
+
+
+# New ViewSet for Driver Tracking
+
+
+class DriverTrackingViewSet(
+    viewsets.GenericViewSet, mixins.CreateModelMixin, mixins.ListModelMixin
+):
+    """
+    Dedicated API for live driver tracking.
+    - POST /driver/tracking/update/ → Driver sends current location
+    - GET /driver/tracking/live/ → Admin gets all active drivers' latest locations
+    - GET /driver/tracking/history/?driver_id=uuid&hours=1 → Get breadcrumb trail
+    """
+
+    queryset = DriverLocation.objects.select_related(
+        "driver_profile__user", "driver_profile__hub"
+    )
+    serializer_class = DriverLocationSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_permissions(self):
+        if self.action in ['live_locations', 'location_history']:
+            return [IsAdmin()]  # Admins only for global views
+        elif self.action == 'update_location':
+            return [IsDriver()]  # Drivers update their location
+        elif self.action == 'current_route':
+            # Allow drivers for their own (no driver_id), admins for any
+            if self.request.query_params.get('driver_id'):
+                return [IsAdmin()]
+            else:
+                return [IsDriver()]
+        return super().get_permissions()
+
+    @action(detail=False, methods=["get"], url_path="current-route")
+    def current_route(self, request):
+        """
+        Get the current route for a specific driver, including bookings (with lat/lng for stops).
+        Query param: driver_id=uuid
+        Used by frontend to compute directions.
+        """
+        driver_id = request.query_params.get("driver_id")
+        if not driver_id:
+            return Response({"error": "driver_id required"}, status=400)
+
+        try:
+            driver = DriverProfile.objects.get(id=driver_id)
+            # Get the active route (assuming one active route per driver)
+            route = (
+                Route.objects.filter(
+                    driver=driver, status__in=["assigned", "in_progress"]
+                )
+                .select_related("shift")
+                .prefetch_related("bookings")
+                .first()
+            )
+
+            if not route:
+                return Response({"detail": "No active route found"}, status=404)
+
+            serializer = RouteSerializer(
+                route
+            )  # Assuming RouteSerializer includes bookings with lat/lng
+            return Response(serializer.data)
+        except DriverProfile.DoesNotExist:
+            return Response({"error": "Driver not found"}, status=404)
+
+    @action(detail=False, methods=["post"], url_path="update-location")
+    def update_location(self, request):
+        try:
+            driver_profile = request.user.driver_profile
+        except AttributeError:
+            return Response(
+                {"error": "Driver profile not found"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = DriverLocationCreateSerializer(data=request.data)
+        if serializer.is_valid():
+            location = DriverLocation.objects.create(
+                driver_profile=driver_profile, **serializer.validated_data
+            )
+            # Update availability lat/lng if needed (from signals.py)
+            return Response(
+                DriverLocationSerializer(location).data, status=status.HTTP_201_CREATED
+            )
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=False, methods=["get"], url_path="live")
+    def live_locations(self, request):
+        """
+        Returns the LATEST location for each active driver.
+        Query params:
+            - hub_id=uuid
+            - only_available=true
+            - minutes_since_update=5 (only recent updates)
+        """
+        minutes = int(request.query_params.get("minutes_since_update", 10))
+        cutoff = timezone.now() - timedelta(minutes=minutes)
+
+        # Subquery: latest location per driver
+        latest_locations = DriverLocation.objects.filter(
+            driver_profile=OuterRef("driver_profile"), timestamp__gte=cutoff
+        ).order_by("-timestamp")[:1]
+
+        queryset = DriverLocation.objects.filter(
+            id__in=Subquery(latest_locations.values("id"))
+        ).select_related("driver_profile__user", "driver_profile__hub")
+
+        # Filters
+        hub_id = request.query_params.get("hub_id")
+        if hub_id:
+            queryset = queryset.filter(driver_profile__hub_id=hub_id)
+
+        only_available = (
+            request.query_params.get("only_available", "true").lower() == "true"
+        )
+        if only_available:
+            queryset = queryset.filter(driver_profile__availability__available=True)
+
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=["get"], url_path="history")
+    def location_history(self, request):
+        """
+        Get breadcrumb trail for a driver.
+        Required: driver_id=uuid
+        Optional: hours=2, limit=100
+        """
+        driver_id = request.query_params.get("driver_id")
+        if not driver_id:
+            return Response({"error": "driver_id required"}, status=400)
+
+        hours = int(request.query_params.get("hours", 4))
+        limit = int(request.query_params.get("limit", 200))
+
+        cutoff = timezone.now() - timedelta(hours=hours)
+
+        queryset = (
+            self.get_queryset()
+            .filter(driver_profile_id=driver_id, timestamp__gte=cutoff)
+            .order_by("timestamp")[:limit]
+        )
+
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)

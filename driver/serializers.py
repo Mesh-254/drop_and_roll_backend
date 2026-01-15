@@ -5,7 +5,14 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from driver.models import (
-    DriverAvailability, DriverPayout, DriverRating, DriverDocument, DriverProfile, DriverInvitation, DriverShift
+    DriverAvailability,
+    DriverPayout,
+    DriverRating,
+    DriverDocument,
+    DriverProfile,
+    DriverInvitation,
+    DriverShift,
+    DriverLocation,
 )
 
 User = get_user_model()
@@ -21,8 +28,7 @@ class DriverAvailabilitySerializer(serializers.ModelSerializer):
 class DriverPayoutSerializer(serializers.ModelSerializer):
     class Meta:
         model = DriverPayout
-        fields = ["id", "amount", "status",
-                  "payout_date", "meta", "created_at"]
+        fields = ["id", "amount", "status", "payout_date", "meta", "created_at"]
         read_only_fields = ["id", "status", "payout_date", "created_at"]
 
 
@@ -33,13 +39,20 @@ class DriverPayoutCreateSerializer(serializers.ModelSerializer):
 
 
 class DriverRatingSerializer(serializers.ModelSerializer):
-    customer_email = serializers.EmailField(
-        source="customer.email", read_only=True)
+    customer_email = serializers.EmailField(source="customer.email", read_only=True)
 
     class Meta:
         model = DriverRating
-        fields = ["id", "driver_profile", "customer", "booking",
-                  "rating", "comment", "created_at", "customer_email"]
+        fields = [
+            "id",
+            "driver_profile",
+            "customer",
+            "booking",
+            "rating",
+            "comment",
+            "created_at",
+            "customer_email",
+        ]
         read_only_fields = ["id", "created_at", "customer_email"]
 
     def validate_rating(self, value):
@@ -72,8 +85,9 @@ class DriverDocumentSerializer(serializers.ModelSerializer):
 
     def validate_file(self, value):
         print(
-            f"Server received file: name={value.name}, content_type={value.content_type}, size={value.size}")
-        allowed_types = ['application/pdf', 'image/jpeg', 'image/png']
+            f"Server received file: name={value.name}, content_type={value.content_type}, size={value.size}"
+        )
+        allowed_types = ["application/pdf", "image/jpeg", "image/png"]
         if value.content_type not in allowed_types:
             raise serializers.ValidationError(
                 f"Invalid file type. Allowed types are: {', '.join(allowed_types)}"
@@ -87,8 +101,7 @@ class DriverDocumentSerializer(serializers.ModelSerializer):
 
     def validate_doc_type(self, value):
         # Ensure doc_type is one of the expected types
-        allowed_doc_types = ["Driver's License",
-                             "Vehicle Registration", "Insurance"]
+        allowed_doc_types = ["Driver's License", "Vehicle Registration", "Insurance"]
         if value not in allowed_doc_types:
             raise serializers.ValidationError(
                 f"Invalid document type. Allowed types are: {', '.join(allowed_doc_types)}"
@@ -98,7 +111,8 @@ class DriverDocumentSerializer(serializers.ModelSerializer):
 
 class DriverInviteCreateSerializer(serializers.ModelSerializer):
     expires_in_hours = serializers.IntegerField(
-        write_only=True, required=False, default=72)
+        write_only=True, required=False, default=72
+    )
 
     class Meta:
         model = DriverInvitation
@@ -117,8 +131,7 @@ class DriverInviteCreateSerializer(serializers.ModelSerializer):
 class DriverInviteDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = DriverInvitation
-        fields = ["id", "email", "full_name",
-                  "token", "expires_at", "accepted_at"]
+        fields = ["id", "email", "full_name", "token", "expires_at", "accepted_at"]
 
 
 class DriverInviteAcceptSerializer(serializers.Serializer):
@@ -154,18 +167,18 @@ class DriverInviteAcceptSerializer(serializers.Serializer):
 
 class DriverInviteSerializer(serializers.Serializer):
     email = serializers.EmailField()
-    phone = serializers.CharField(
-        max_length=20, required=False, allow_blank=True)
+    phone = serializers.CharField(max_length=20, required=False, allow_blank=True)
     full_name = serializers.CharField(max_length=255)
     vehicle_type = serializers.ChoiceField(
-        choices=DriverProfile.Vehicle, required=False)
+        choices=DriverProfile.Vehicle, required=False
+    )
     license_number = serializers.CharField(
-        max_length=50, required=False, allow_blank=True)
+        max_length=50, required=False, allow_blank=True
+    )
 
     def validate_email(self, value):
         if User.objects.filter(email=value).exists():
-            raise serializers.ValidationError(
-                "A user with this email already exists.")
+            raise serializers.ValidationError("A user with this email already exists.")
         return value
 
     def create(self, validated_data):
@@ -179,7 +192,7 @@ class DriverInviteSerializer(serializers.Serializer):
             phone=validated_data.get("phone"),
             full_name=validated_data["full_name"],
             role=User.Role.DRIVER,
-            is_active=False  # activate when invite is accepted
+            is_active=False,  # activate when invite is accepted
         )
         # Optional: create a driver profile with partial info
         DriverProfile.objects.create(
@@ -187,13 +200,71 @@ class DriverInviteSerializer(serializers.Serializer):
             vehicle_type=validated_data.get("vehicle_type", ""),
             license_number=validated_data.get("license_number", ""),
             is_verified=False,
-            status="inactive"
+            status="inactive",
         )
         return user
+
 
 class DriverShiftSerializer(serializers.ModelSerializer):
     class Meta:
         model = DriverShift
         fields = ["__all__"]
         read_only_fields = ["id", "current_load"]
-        
+
+
+# NEW: Create serializer for location updates without driver_profile
+class DriverLocationCreateSerializer(serializers.Serializer):
+    latitude = serializers.FloatField(required=True)
+    longitude = serializers.FloatField(required=True)
+    speed_kmh = serializers.FloatField(allow_null=True, required=False)
+    heading_degrees = serializers.FloatField(allow_null=True, required=False)
+    accuracy_meters = serializers.FloatField(allow_null=True, required=False)
+    altitude_meters = serializers.FloatField(allow_null=True, required=False)
+    source = serializers.CharField(max_length=20, default="mobile_app", required=False)
+
+
+class DriverLocationSerializer(serializers.ModelSerializer):
+    driver_name = serializers.CharField(
+        source="driver_profile.user.get_full_name", read_only=True
+    )
+    driver_email = serializers.EmailField(
+        source="driver_profile.user.email", read_only=True
+    )
+    vehicle_type = serializers.CharField(
+        source="driver_profile.vehicle_type", read_only=True
+    )
+    vehicle_registration = serializers.CharField(
+        source="driver_profile.vehicle_registration", read_only=True, allow_null=True
+    )
+    hub_name = serializers.CharField(
+        source="driver_profile.hub.name", read_only=True, allow_null=True
+    )
+
+    class Meta:
+        model = DriverLocation
+        fields = [
+            "id",
+            "driver_profile",
+            "driver_name",
+            "driver_email",
+            "vehicle_type",
+            "vehicle_registration",
+            "hub_name",
+            "latitude",
+            "longitude",
+            "speed_kmh",
+            "heading_degrees",
+            "accuracy_meters",
+            "altitude_meters",
+            "source",
+            "timestamp",
+        ]
+        read_only_fields = [
+            "id",
+            "timestamp",
+            "driver_name",
+            "driver_email",
+            "vehicle_type",
+            "vehicle_registration",
+            "hub_name",
+        ]

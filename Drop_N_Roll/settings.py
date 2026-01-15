@@ -41,30 +41,31 @@ ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS").split(",")
 # Application definition
 
 INSTALLED_APPS = [
-    'unfold',
-    'django.contrib.admin',
-    'django.contrib.auth',
-    'django.contrib.contenttypes',
-    'django.contrib.sessions',
-    'django.contrib.messages',
-    'django.contrib.staticfiles',
-    'drf_yasg',
-    'rest_framework',
-    'rest_framework_simplejwt',
-    'rest_framework_simplejwt.token_blacklist',
-    'django_seed',
+    "unfold",
+    "django.contrib.admin",
+    "django.contrib.auth",
+    "django.contrib.contenttypes",
+    "django.contrib.sessions",
+    "django.contrib.messages",
+    "django.contrib.staticfiles",
+    "drf_yasg",
+    "rest_framework",
+    "rest_framework_simplejwt",
+    "rest_framework_simplejwt.token_blacklist",
+    "django_seed",
+    "bookings.apps.BookingsConfig",
+    "users.apps.UsersConfig",
+    "tracking.apps.TrackingConfig",
+    "driver.apps.DriverConfig",
+    "payments.apps.PaymentsConfig",
+    "business.apps.BusinessConfig",
+    "support.apps.SupportConfig",
+    "celery",
+    "corsheaders",
+    "social_django",
 
-    'bookings.apps.BookingsConfig',
-    'users.apps.UsersConfig',
-    'tracking.apps.TrackingConfig',
-    'driver.apps.DriverConfig',
-    'payments.apps.PaymentsConfig',
-    'business.apps.BusinessConfig',
-
-    'celery',
-    'corsheaders',
-    'social_django',
-
+    # for live location tracking
+    "channels",
 ]
 
 MIDDLEWARE = [
@@ -96,6 +97,8 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = "Drop_N_Roll.wsgi.application"
+
+ASGI_APPLICATION = "Drop_N_Roll.asgi.application"
 
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
@@ -202,6 +205,15 @@ SIMPLE_JWT = {
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
     "AUTH_HEADER_TYPES": ("Bearer",),
+}
+
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels_redis.core.RedisChannelLayer',
+        'CONFIG': {
+            'hosts': [('127.0.0.1', 6379)],
+        },
+    },
 }
 
 # CELERY

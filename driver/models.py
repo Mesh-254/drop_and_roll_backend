@@ -67,16 +67,19 @@ class DriverProfile(models.Model):
         DriverShift.get_or_create_today(self)
 
     def recompute_availability(self):
-        if not hasattr(self, 'availability'):
-            self.availability = DriverAvailability.objects.create(driver_profile=self, available=False)
-        
+        if not hasattr(self, "availability"):
+            self.availability = DriverAvailability.objects.create(
+                driver_profile=self, available=False
+            )
+
         has_active_routes = Route.objects.filter(
-            driver=self,
-            status__in=['assigned', 'in_progress']
+            driver=self, status__in=["assigned", "in_progress"]
         ).exists()
-        
-        self.availability.available = not has_active_routes  # True if no active routes, else False
-        self.availability.save(update_fields=['available'])
+
+        self.availability.available = (
+            not has_active_routes
+        )  # True if no active routes, else False
+        self.availability.save(update_fields=["available"])
         return self.availability.available
 
     def __str__(self):
@@ -297,3 +300,63 @@ class DriverRating(models.Model):
 
     class Meta:
         unique_together = ("driver_profile", "customer", "booking")
+
+# New model for driver location tracking
+class DriverLocation(models.Model):
+    """
+    Stores real-time and historical location updates from drivers.
+    One row per location update → enables breadcrumbs, playback, analytics.
+    """
+
+    driver_profile = models.ForeignKey(
+        DriverProfile, on_delete=models.CASCADE, related_name="locations"
+    )
+
+    # Core GPS data
+    latitude = models.DecimalField(max_digits=9, decimal_places=6)
+    longitude = models.DecimalField(max_digits=9, decimal_places=6)
+
+    # Optional enriched data from mobile device
+    speed_kmh = models.DecimalField(
+        max_digits=6, decimal_places=2, null=True, blank=True
+    )
+    heading_degrees = models.IntegerField(null=True, blank=True)  # 0-359
+    accuracy_meters = models.DecimalField(
+        max_digits=8, decimal_places=2, null=True, blank=True
+    )
+    altitude_meters = models.DecimalField(
+        max_digits=8, decimal_places=2, null=True, blank=True
+    )
+
+    # Source info
+    source = models.CharField(
+        max_length=20,
+        choices=[
+            ("mobile_app", "Mobile App"),
+            ("web_browser", "Web Browser"),
+            ("manual", "Manual"),
+        ],
+        default="mobile_app",
+    )
+
+    # Timestamp
+    timestamp = models.DateTimeField(default=timezone.now, db_index=True)
+
+    # Optional: GeoDjango PointField (requires PostGIS)
+    # location = gis_models.PointField(null=True, blank=True, srid=4326)
+
+    class Meta:
+        verbose_name = "Driver Location Update"
+        verbose_name_plural = "Driver Location Updates"
+        ordering = ["-timestamp"]
+        indexes = [
+            models.Index(
+                fields=["driver_profile", "-timestamp"]
+            ),  # Fast latest per driver
+            models.Index(fields=["timestamp"]),  # Time-based queries
+        ]
+        # Optional: keep only last N days/hours if storage is concern
+        # But usually keep forever for analytics
+
+    def __str__(self):
+        return f"{self.driver_profile.user.get_full_name()} @ {self.timestamp} ({self.latitude}, {self.longitude})"

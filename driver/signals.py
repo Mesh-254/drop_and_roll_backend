@@ -1,7 +1,10 @@
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 from bookings.models import Booking, Route
-from driver.models import DriverShift, DriverProfile, DriverAvailability
+from driver.models import DriverShift, DriverProfile, DriverAvailability, DriverLocation
+from channels.layers import get_channel_layer
+from asgiref.sync import async_to_sync
+from .serializers import DriverLocationSerializer
 
 
 @receiver(post_save, sender=DriverProfile)
@@ -17,7 +20,27 @@ def create_and_set_availability(sender, instance, created, **kwargs):
     else:
         # On update (e.g., status change to active), recompute if needed
         if hasattr(instance, "availability"):
-            instance.recompute_availability()  # See method below
+            instance.recompute_availability()
+
+
+# sync latest location from DriverLocation to DriverAvailability
+@receiver(post_save, sender=DriverLocation)
+def update_driver_availability_location(sender, instance, created, **kwargs):
+    if not created:
+        return  # Only on new updates
+
+    availability, _ = DriverAvailability.objects.get_or_create(
+        driver_profile=instance.driver_profile
+    )
+    availability.lat = instance.latitude
+    availability.lng = instance.longitude
+    availability.last_updated = instance.timestamp
+    # Optionally set available=True if driver is sending updates
+    # Or keep logic in recompute_availability()
+    availability.save(update_fields=["lat", "lng", "last_updated"])
+
+    # Trigger any other logic (e.g., route progress detection)
+    instance.driver_profile.recompute_availability()
 
 
 @receiver(post_save, sender=Booking)
@@ -67,3 +90,22 @@ def update_availability_on_shift_change(sender, instance, **kwargs):
         if not has_active_routes and not availability.available:
             availability.available = True
             availability.save(update_fields=["available"])
+
+
+@receiver(post_save, sender=DriverLocation)
+def broadcast_location_update(sender, instance, created, **kwargs):
+    if not created:
+        return  # Only broadcast new locations
+
+    channel_layer = get_channel_layer()
+    if channel_layer is None:
+        return  # No channel layer (e.g., in tests or non-ASGI env)
+
+    serializer = DriverLocationSerializer(instance)
+    async_to_sync(channel_layer.group_send)(
+        "tracking",
+        {
+            "type": "driver.location.update",  # Will call driver_location_update in consumer
+            "data": serializer.data
+        }
+    )
