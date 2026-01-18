@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timedelta, datetime, time
 import uuid
 
 from django.conf import settings
@@ -121,7 +122,6 @@ class DriverShift(models.Model):
     max_hours = models.FloatField(default=8.0)
     current_load = models.JSONField(default=dict)
 
-    max_hours = models.FloatField(default=8.0)  # Standardized to 8h
     MIN_ROUTE_HOURS = 4.0  # Configurable threshold for "short" routes
 
     status = models.CharField(
@@ -130,8 +130,8 @@ class DriverShift(models.Model):
 
     class Meta:
         indexes = [
-            models.Index(fields=["driver", "status"]),  # For fast checks on open shifts
-            models.Index(fields=["start_time", "end_time"]),  # For overdue queries
+            models.Index(fields=["driver", "status"]),           # For fast checks on open shifts
+            models.Index(fields=["start_time", "end_time"]),     # For overdue queries
         ]
 
     def save(self, *args, **kwargs):
@@ -176,25 +176,41 @@ class DriverShift(models.Model):
     @classmethod
     def get_or_create_today(cls, driver_profile):
         """
-        Returns the DriverShift instance for today.
-        Always returns the object directly (not a tuple).
+        Get or create the DriverShift for the current day.
+        
+        Important characteristics:
+        - Uses current time to determine "today"
+        - Creates shift with 06:00–18:00 window based on when it's first called
+        - Does NOT require the 'date' field (can be removed from model if desired)
+        - Safe for concurrent calls (get_or_create is atomic)
+        - Sets status to PENDING only if no routes exist yet
+        
+        Returns:
+            DriverShift: The shift object for today (always returns object, never tuple)
         """
-        today = timezone.now().date()
+        now = timezone.now()
+        today_start = now.replace(hour=6, minute=0, second=0, microsecond=0)
+        today_end = now.replace(hour=18, minute=0, second=0, microsecond=0)
+
         shift, created = cls.objects.get_or_create(
             driver=driver_profile,
-            # date=today,
+            # date=today,           # ← commented out → we don't need it anymore
             defaults={
                 "current_load": {"hours": 0.0, "weight": 0.0, "volume": 0.0},
-                "start_time": timezone.now().replace(
-                    hour=6, minute=0, second=0, microsecond=0
-                ),
-                "end_time": timezone.now().replace(
-                    hour=18, minute=0, second=0, microsecond=0
-                ),
+                "start_time": today_start,
+                "end_time": today_end,
+                # We don't set status here — we handle it below
             },
         )
-        shift.status = cls.Status.PENDING if not shift.routes.exists() else shift.status
-        shift.save()
+
+        # If this is a newly created shift OR it has no routes yet → make sure it's PENDING
+        if created or not shift.routes.exists():
+            if shift.status != cls.Status.PENDING:
+                shift.status = cls.Status.PENDING
+                shift.save(update_fields=['status'])
+        # If it already has routes, we preserve whatever status it currently has
+        # (usually ASSIGNED/ACTIVE/COMPLETED)
+
         return shift
 
 
