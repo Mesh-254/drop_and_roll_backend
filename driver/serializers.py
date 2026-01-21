@@ -2,6 +2,7 @@ from datetime import timedelta
 
 from django.contrib.auth import get_user_model
 from django.utils import timezone
+from bookings.serializers import RouteSerializer
 from rest_framework import serializers
 
 from driver.models import (
@@ -239,6 +240,8 @@ class DriverLocationSerializer(serializers.ModelSerializer):
     hub_name = serializers.CharField(
         source="driver_profile.hub.name", read_only=True, allow_null=True
     )
+    route_id = serializers.UUIDField(source='route.id', read_only=True)
+    route_details = RouteSerializer(source='route', read_only=True, context={'for_admin': True})  # NEW: Full route with stops
 
     class Meta:
         model = DriverLocation
@@ -258,6 +261,8 @@ class DriverLocationSerializer(serializers.ModelSerializer):
             "altitude_meters",
             "source",
             "timestamp",
+            "route_id",
+            "route_details",
         ]
         read_only_fields = [
             "id",
