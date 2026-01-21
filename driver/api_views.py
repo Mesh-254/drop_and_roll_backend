@@ -1,7 +1,9 @@
 import uuid
 from decimal import Decimal
 
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from bookings.permissions import IsAdminOrReadOnly
 from rest_framework import viewsets, mixins
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated, AllowAny
@@ -17,7 +19,7 @@ from django.db.models import Avg, OuterRef, Subquery
 from rest_framework.permissions import IsAdminUser
 from django.db import transaction
 from rest_framework.parsers import MultiPartParser, FormParser
-from django.db.models import Case, When, IntegerField
+from django.db.models import Case, When, IntegerField, Q
 
 from bookings.models import Booking, BookingStatus, Route
 from bookings.serializers import RouteSerializer
@@ -37,6 +39,7 @@ from driver.serializers import (
     DriverLocationCreateSerializer,
     DriverPayoutSerializer,
     DriverPayoutCreateSerializer,
+    DriverProfileSerializer,
     DriverRatingSerializer,
     DriverDocumentSerializer,
     DriverInviteCreateSerializer,
@@ -46,7 +49,7 @@ from driver.serializers import (
     DriverLocationSerializer,
 )
 from users.serializers import UserSerializer
-from .permissions import IsAdmin, IsDriver, IsCustomer
+from .permissions import IsAdmin, IsDriver, IsCustomer, IsDriverOrAdmin
 from datetime import timedelta
 
 
@@ -440,7 +443,7 @@ class DriverAssignedBookingViewSet(mixins.ListModelMixin, viewsets.GenericViewSe
 
 
 class DriverRouteViewSet(viewsets.GenericViewSet):
-    permission_classes = [IsDriver]
+    permission_classes = [IsDriverOrAdmin]
     pagination_class = PageNumberPagination
 
     @action(detail=False, methods=["get"], url_path="current-route")
@@ -451,6 +454,18 @@ class DriverRouteViewSet(viewsets.GenericViewSet):
         - If status filter: Shows all bookings with that status (route or manual), ordered by priority.
         Supports pagination for large lists.
         """
+
+        is_admin = request.user.is_staff  # NEW: Detect admin
+        if is_admin:
+            driver_id = request.query_params.get(
+                "driver_id"
+            )  # Allow ?driver_id=uuid for admins
+            if not driver_id:
+                return Response({"error": "driver_id required for admins"}, status=400)
+            driver = get_object_or_404(DriverProfile, id=driver_id)
+        else:
+            driver = get_object_or_404(DriverProfile, user=request.user)  # For drivers
+
         driver = DriverProfile.objects.select_related("hub", "hub__address").get(
             user=request.user
         )
@@ -828,6 +843,36 @@ class DriverMetricsView(APIView):
         return Response(data)
 
 
+class DriverViewSet(viewsets.GenericViewSet):
+    permission_classes = [IsDriver]  # From your permissions.py
+    queryset = DriverProfile.objects.all()
+    serializer_class = DriverProfileSerializer
+
+    @action(detail=False, methods=["post"], url_path="toggle-tracking")
+    def toggle_tracking(self, request):
+        """
+        Toggle location tracking for the authenticated driver.
+        Returns: {'success': True, 'tracking_enabled': bool}
+        """
+        try:
+            driver = request.user.driver_profile  # Assumes user has driver_profile
+            # Toggle the flag
+            driver.is_tracking_enabled = not driver.is_tracking_enabled
+            driver.save()
+            return Response(
+                {
+                    "success": True,
+                    "tracking_enabled": driver.is_tracking_enabled,
+                    "message": f"Location tracking turned {'ON' if driver.is_tracking_enabled else 'OFF'}",
+                }
+            )
+        except AttributeError:
+            return Response(
+                {"error": "Driver profile not found"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+
 # New ViewSet for Driver Tracking
 
 
@@ -835,64 +880,35 @@ class DriverTrackingViewSet(
     viewsets.GenericViewSet, mixins.CreateModelMixin, mixins.ListModelMixin
 ):
     """
-    Dedicated API for live driver tracking.
-    - POST /driver/tracking/update/ → Driver sends current location
-    - GET /driver/tracking/live/ → Admin gets all active drivers' latest locations
-    - GET /driver/tracking/history/?driver_id=uuid&hours=1 → Get breadcrumb trail
+    Live driver tracking endpoints
+
+    Main endpoints:
+    • POST   /api/driver/live-tracking/update-location/     → driver sends location
+    • GET    /api/driver/live-tracking/live/               → admin sees active drivers
+    • GET    /api/driver/live-tracking/current-route/      → current route (driver or admin)
+    • GET    /api/driver/live-tracking/history/            → breadcrumb trail
     """
 
     queryset = DriverLocation.objects.select_related(
-        "driver_profile__user", "driver_profile__hub"
+        "driver_profile__user", "driver_profile__hub", "route"
     )
     serializer_class = DriverLocationSerializer
-    permission_classes = [IsAuthenticated]
 
     def get_permissions(self):
-        if self.action in ['live_locations', 'location_history']:
-            return [IsAdmin()]  # Admins only for global views
-        elif self.action == 'update_location':
-            return [IsDriver()]  # Drivers update their location
-        elif self.action == 'current_route':
-            # Allow drivers for their own (no driver_id), admins for any
-            if self.request.query_params.get('driver_id'):
+        if self.action in ["live_locations", "location_history"]:
+            return [IsAdmin()]
+        if self.action == "update_location":
+            return [IsDriver()]
+        if self.action == "current_route":
+            # Admin can see any driver, driver can only see own
+            if self.request.query_params.get("driver_id"):
                 return [IsAdmin()]
-            else:
-                return [IsDriver()]
+            return [IsDriver()]
         return super().get_permissions()
 
-    @action(detail=False, methods=["get"], url_path="current-route")
-    def current_route(self, request):
-        """
-        Get the current route for a specific driver, including bookings (with lat/lng for stops).
-        Query param: driver_id=uuid
-        Used by frontend to compute directions.
-        """
-        driver_id = request.query_params.get("driver_id")
-        if not driver_id:
-            return Response({"error": "driver_id required"}, status=400)
-
-        try:
-            driver = DriverProfile.objects.get(id=driver_id)
-            # Get the active route (assuming one active route per driver)
-            route = (
-                Route.objects.filter(
-                    driver=driver, status__in=["assigned", "in_progress"]
-                )
-                .select_related("shift")
-                .prefetch_related("bookings")
-                .first()
-            )
-
-            if not route:
-                return Response({"detail": "No active route found"}, status=404)
-
-            serializer = RouteSerializer(
-                route
-            )  # Assuming RouteSerializer includes bookings with lat/lng
-            return Response(serializer.data)
-        except DriverProfile.DoesNotExist:
-            return Response({"error": "Driver not found"}, status=404)
-
+    # ────────────────────────────────────────────────
+    #  POST /update-location/    (driver sends location)
+    # ────────────────────────────────────────────────
     @action(detail=False, methods=["post"], url_path="update-location")
     def update_location(self, request):
         try:
@@ -908,54 +924,105 @@ class DriverTrackingViewSet(
             location = DriverLocation.objects.create(
                 driver_profile=driver_profile, **serializer.validated_data
             )
-            # Update availability lat/lng if needed (from signals.py)
+            # Signals should already update DriverAvailability.lat/lng
             return Response(
                 DriverLocationSerializer(location).data, status=status.HTTP_201_CREATED
             )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+    # ────────────────────────────────────────────────
+    #  GET /live/    → Latest location of active drivers
+    # ────────────────────────────────────────────────
     @action(detail=False, methods=["get"], url_path="live")
     def live_locations(self, request):
-        """
-        Returns the LATEST location for each active driver.
-        Query params:
-            - hub_id=uuid
-            - only_available=true
-            - minutes_since_update=5 (only recent updates)
-        """
-        minutes = int(request.query_params.get("minutes_since_update", 10))
+        minutes = int(request.query_params.get("minutes_since_update", 5))  # Tighter for "online"
         cutoff = timezone.now() - timedelta(minutes=minutes)
 
-        # Subquery: latest location per driver
-        latest_locations = DriverLocation.objects.filter(
-            driver_profile=OuterRef("driver_profile"), timestamp__gte=cutoff
+        latest_subquery = DriverLocation.objects.filter(
+            driver_profile=OuterRef("driver_profile"),
+            timestamp__gte=cutoff
         ).order_by("-timestamp")[:1]
 
         queryset = DriverLocation.objects.filter(
-            id__in=Subquery(latest_locations.values("id"))
-        ).select_related("driver_profile__user", "driver_profile__hub")
+            id__in=Subquery(latest_subquery.values("id"))
+        ).select_related(
+            "driver_profile__user",
+            "driver_profile__hub",
+            "route"
+        ).prefetch_related(
+            "route__bookings__pickup_address",
+            "route__bookings__dropoff_address",
+            "driver_profile__bookings"
+        )
 
-        # Filters
+        # Filter for assigned (available=False or is_tracking_enabled=True)
+        show_assigned = request.query_params.get("show_assigned", "true").lower() == "true"
+        if show_assigned:
+            queryset = queryset.filter(
+                Q(driver_profile__availability__available=False) |
+                Q(driver_profile__is_tracking_enabled=True)
+            )
+
+        # Other filters (hub, only_available - but override if show_assigned)
+        only_available = request.query_params.get("only_available", "false").lower() == "true"
+        if only_available and not show_assigned:
+            queryset = queryset.filter(driver_profile__availability__available=True)
+
         hub_id = request.query_params.get("hub_id")
         if hub_id:
             queryset = queryset.filter(driver_profile__hub_id=hub_id)
 
-        only_available = (
-            request.query_params.get("only_available", "true").lower() == "true"
-        )
-        if only_available:
-            queryset = queryset.filter(driver_profile__availability__available=True)
-
-        serializer = self.get_serializer(queryset, many=True)
+        serializer = self.get_serializer(queryset, many=True, context={"for_admin": request.user.is_staff})
         return Response(serializer.data)
 
+    # ────────────────────────────────────────────────
+    #  GET /current-route/    (used by admin map click)
+    # ────────────────────────────────────────────────
+    @action(detail=False, methods=["get"], url_path="current-route")
+    def current_route(self, request):
+        """
+        Get the current route (if exists) and all active bookings for a driver.
+        Returns {"route": ..., "bookings": [...]} or {"route": null, "bookings": [...] }.
+        Query param: driver_id=uuid
+        """
+        driver_id = request.query_params.get("driver_id")
+        if not driver_id:
+            return Response({"error": "driver_id required"}, status=400)
+
+        try:
+            driver = DriverProfile.objects.get(id=driver_id)
+            
+            # Get active route if exists
+            route = Route.objects.filter(
+                driver=driver, status__in=["assigned", "in_progress"]
+            ).select_related("shift").prefetch_related("bookings").first()
+            
+            # Get all active bookings (from route or direct)
+            bookings = Booking.objects.filter(
+                driver=driver, status__in=["assigned", "in_transit", "picked_up"]
+            ).order_by('created_at')  # Sort by creation if no route (or use custom order field)
+            
+            if route:
+                # Ensure bookings include route's if not direct
+                bookings = bookings | route.bookings.all()
+                bookings = bookings.distinct().order_by('created_at')
+            
+            if not bookings.exists():
+                return Response({"detail": "No active route or bookings found"}, status=404)
+            
+            data = {
+                "route": RouteSerializer(route).data if route else None,
+                "bookings": BookingSerializer(bookings, many=True).data
+            }
+            return Response(data)
+        except DriverProfile.DoesNotExist:
+            return Response({"error": "Driver not found"}, status=404)
+
+    # ────────────────────────────────────────────────
+    #  GET /history/    (breadcrumb trail)
+    # ────────────────────────────────────────────────
     @action(detail=False, methods=["get"], url_path="history")
     def location_history(self, request):
-        """
-        Get breadcrumb trail for a driver.
-        Required: driver_id=uuid
-        Optional: hours=2, limit=100
-        """
         driver_id = request.query_params.get("driver_id")
         if not driver_id:
             return Response({"error": "driver_id required"}, status=400)
@@ -970,6 +1037,10 @@ class DriverTrackingViewSet(
             .filter(driver_profile_id=driver_id, timestamp__gte=cutoff)
             .order_by("timestamp")[:limit]
         )
+
+        route_id = request.query_params.get("route_id")
+        if route_id:
+            queryset = queryset.filter(route_id=route_id)
 
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
