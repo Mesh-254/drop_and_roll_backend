@@ -16,11 +16,14 @@ from channels.security.websocket import WebsocketDenier
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "Drop_N_Roll.settings")
 
+# This is just a lazy wrapper - real setup happens on first request
+django_asgi_app = get_asgi_application()
+
 from driver.urls import websocket_urlpatterns  # Import the websocket_urlpatterns
 
 application = ProtocolTypeRouter(
     {
-        "http": get_asgi_application(),
+        "http": django_asgi_app,
         "websocket": AuthMiddlewareStack(
             URLRouter(websocket_urlpatterns)
         ),
