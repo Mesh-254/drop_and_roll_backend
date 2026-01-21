@@ -17,6 +17,7 @@ from django.utils import timezone
 import uuid
 from django.db.models import Count
 import logging
+from .utils.distance_utils import distance
 
 
 logger = logging.getLogger(__name__)
@@ -323,7 +324,7 @@ class Booking(models.Model):
 
     class Meta:
         indexes = [
-            models.Index(fields=["status"]),
+            models.Index(fields=["driver", "status"]),
             models.Index(fields=["created_at"]),
             models.Index(fields=["customer"]),
             models.Index(fields=["receiver_email"]),
@@ -684,6 +685,64 @@ class Route(models.Model):
             self.save(update_fields=["driver", "status", "visible_at"])
 
         return self
+    
+    def get_detailed_stops(self, for_admin=False):
+        """
+        Returns list of dicts with lat/lng/status for stops.
+        - Uses ordered_stops if available.
+        - Fallback: Sort active bookings by distance (using your distance_utils).
+        - for_admin: Include more details like booking_id, status.
+        """
+        active_statuses = [BookingStatus.ASSIGNED, BookingStatus.PICKED_UP, BookingStatus.AT_HUB, BookingStatus.IN_TRANSIT]
+        bookings = self.bookings.filter(status__in=active_statuses).select_related('pickup_address', 'dropoff_address')
+
+        if self.ordered_stops:
+            # Map ordered_stops to detailed info
+            stops = []
+            booking_map = {str(b.id): b for b in bookings}
+            for stop in self.ordered_stops:
+                booking_id = stop.get('booking_id')
+                booking = booking_map.get(booking_id)
+                if not booking:
+                    continue
+                addr = booking.pickup_address if self.leg_type == 'pickup' else booking.dropoff_address
+                if not addr or not addr.latitude or not addr.longitude:
+                    continue
+                stop_detail = {
+                    'booking_id': str(booking.id),
+                    'tracking_number': booking.tracking_number or str(booking.id)[:8],
+                    'type': self.leg_type,
+                    'status': booking.status,
+                    'lat': float(addr.latitude),
+                    'lng': float(addr.longitude),
+                    'address_short': f"{addr.line1[:30]}... {addr.postal_code or ''}".strip(),
+                }
+                if for_admin:
+                    stop_detail['customer_name'] = booking.customer.full_name if booking.customer else 'Guest'
+                    stop_detail['scheduled_at'] = booking.scheduled_pickup_at if self.leg_type == 'pickup' else booking.scheduled_dropoff_at
+                stops.append(stop_detail)
+            return stops
+        else:
+            # Fallback sort (use hub as origin)
+            origin_lat, origin_lng = (self.hub.address.latitude, self.hub.address.longitude) if self.hub else (0, 0)
+            def sort_key(b):
+                addr = b.pickup_address if self.leg_type == 'pickup' else b.dropoff_address
+                return distance(origin_lat, origin_lng, float(addr.latitude), float(addr.longitude)) if addr.latitude else float('inf')
+            sorted_bookings = sorted(bookings, key=sort_key)
+            return [  # Same structure as above
+                {
+                    'booking_id': str(b.id),
+                    'tracking_number': b.tracking_number or str(b.id)[:8],
+                    'type': self.leg_type,
+                    'status': b.status,
+                    'lat': float(addr.latitude),
+                    'lng': float(addr.longitude),
+                    'address_short': f"{addr.line1[:30]}... {addr.postal_code or ''}".strip(),
+                    **({'customer_name': b.customer.full_name if b.customer else 'Guest',
+                        'scheduled_at': b.scheduled_pickup_at if self.leg_type == 'pickup' else b.scheduled_dropoff_at} if for_admin else {})
+                } for b in sorted_bookings
+                if (addr := (b.pickup_address if self.leg_type == 'pickup' else b.dropoff_address)) and addr.latitude
+            ]
 
 
 @receiver(post_save, sender=Booking)
