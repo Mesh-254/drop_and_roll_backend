@@ -101,6 +101,7 @@ class Address(models.Model):
     class Meta:
         indexes = [
             models.Index(fields=["city", "region", "country"]),
+            models.Index(fields=["postal_code"]),
         ]
 
     def __str__(self):
