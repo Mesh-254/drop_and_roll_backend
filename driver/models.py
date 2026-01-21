@@ -39,6 +39,7 @@ class DriverProfile(models.Model):
     vehicle_type = models.CharField(max_length=20, choices=Vehicle.choices)
     vehicle_registration = models.CharField(max_length=50, blank=True, null=True)
     is_verified = models.BooleanField(default=False)
+    is_tracking_enabled = models.BooleanField(default=False)  # Manual toggle
     status = models.CharField(
         max_length=20, choices=Status.choices, default=Status.INACTIVE
     )
@@ -73,16 +74,23 @@ class DriverProfile(models.Model):
                 driver_profile=self, available=False
             )
 
-        has_active_routes = Route.objects.filter(
-            driver=self, status__in=["assigned", "in_progress"]
-        ).exists()
-
-        self.availability.available = (
-            not has_active_routes
-        )  # True if no active routes, else False
-        self.availability.save(update_fields=["available"])
-        return self.availability.available
-
+        has_active = (
+            self.routes.filter(status__in=["assigned", "in_progress"]).exists()
+            or self.assigned_bookings.filter(
+                status__in=["assigned", "in_progress"]
+            ).exists()
+        )
+        availability = (
+            self.availability
+            if hasattr(self, "availability")
+            else DriverAvailability.objects.get_or_create(driver_profile=self)[0]
+        )
+        availability.available = (
+            not has_active
+        )  # True if no active routes/bookings, else False
+        availability.save(update_fields=["available"])
+        return availability.available
+    
     def __str__(self):
         hub_str = f" [{self.hub.name}]" if self.hub else " [No Hub]"
         return f"{self.user.get_full_name()}:{self.user.email} - {self.user.role} {hub_str}"
@@ -130,8 +138,8 @@ class DriverShift(models.Model):
 
     class Meta:
         indexes = [
-            models.Index(fields=["driver", "status"]),           # For fast checks on open shifts
-            models.Index(fields=["start_time", "end_time"]),     # For overdue queries
+            models.Index(fields=["driver", "status"]),  # For fast checks on open shifts
+            models.Index(fields=["start_time", "end_time"]),  # For overdue queries
         ]
 
     def save(self, *args, **kwargs):
@@ -177,14 +185,14 @@ class DriverShift(models.Model):
     def get_or_create_today(cls, driver_profile):
         """
         Get or create the DriverShift for the current day.
-        
+
         Important characteristics:
         - Uses current time to determine "today"
         - Creates shift with 06:00–18:00 window based on when it's first called
         - Does NOT require the 'date' field (can be removed from model if desired)
         - Safe for concurrent calls (get_or_create is atomic)
         - Sets status to PENDING only if no routes exist yet
-        
+
         Returns:
             DriverShift: The shift object for today (always returns object, never tuple)
         """
@@ -207,7 +215,7 @@ class DriverShift(models.Model):
         if created or not shift.routes.exists():
             if shift.status != cls.Status.PENDING:
                 shift.status = cls.Status.PENDING
-                shift.save(update_fields=['status'])
+                shift.save(update_fields=["status"])
         # If it already has routes, we preserve whatever status it currently has
         # (usually ASSIGNED/ACTIVE/COMPLETED)
 
@@ -317,6 +325,7 @@ class DriverRating(models.Model):
     class Meta:
         unique_together = ("driver_profile", "customer", "booking")
 
+
 # New model for driver location tracking
 class DriverLocation(models.Model):
     """
@@ -357,9 +366,10 @@ class DriverLocation(models.Model):
 
     # Timestamp
     timestamp = models.DateTimeField(default=timezone.now, db_index=True)
-
-    # Optional: GeoDjango PointField (requires PostGIS)
-    # location = gis_models.PointField(null=True, blank=True, srid=4326)
+    # Optional: Tie to active route
+    route = models.ForeignKey(
+        "bookings.Route", on_delete=models.SET_NULL, null=True, blank=True
+    )
 
     class Meta:
         verbose_name = "Driver Location Update"
