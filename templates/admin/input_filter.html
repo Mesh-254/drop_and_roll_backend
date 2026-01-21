@@ -1,0 +1,20 @@
+{% load i18n %}
+
+<h3>{% blocktranslate %}{{ title }}{% endblocktranslate %}</h3>
+<ul class="admin-filter-{{ title|slugify }}">
+  <li>
+    <!-- Form submits GET to preserve other filters/pagination -->
+    <form method="get">
+      <!-- Input field with current value pre-filled -->
+      <input
+        type="text"
+        name="{{ spec.parameter_name }}"
+        value="{{ spec.value|default_if_none:'' }}"
+        placeholder="Enter postcode (partial OK)"
+        style="width: 150px; margin-right: 5px"
+      />
+      <!-- Submit button -->
+      <input type="submit" value="{% trans 'Filter' %}" />
+    </form>
+  </li>
+</ul>
