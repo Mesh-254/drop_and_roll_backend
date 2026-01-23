@@ -75,7 +75,7 @@ class DriverProfile(models.Model):
             )
 
         has_active = (
-            self.routes.filter(status__in=["assigned", "in_progress"]).exists()
+            self.assigned_routes.filter(status__in=["assigned", "in_progress"]).exists()
             or self.assigned_bookings.filter(
                 status__in=["assigned", "in_progress"]
             ).exists()
