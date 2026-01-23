@@ -12,8 +12,6 @@ from .models import (
 )
 from .utils.pricing import compute_quote
 from decimal import Decimal
-from rest_framework import serializers
-
 from bookings.models import (
     Address,
     Quote,
