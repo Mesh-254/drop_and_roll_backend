@@ -372,6 +372,16 @@ class BulkUploadSerializer(serializers.ModelSerializer):
 
 
 class RouteSerializer(serializers.ModelSerializer):
+    detailed_stops = serializers.SerializerMethodField()
+
     class Meta:
         model = Route
         fields = "__all__"
+
+    def get_detailed_stops(self, obj):
+        stops = obj.get_detailed_stops(for_admin=self.context.get("for_admin", False))
+        # Embed type if not already (assumes get_detailed_stops includes it; else add here)
+        for stop in stops:
+            if "type" not in stop:
+                stop["type"] = obj.leg_type  # Fallback
+        return stops
