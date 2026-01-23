@@ -18,7 +18,10 @@ import uuid
 from django.db.models import Count
 import logging
 from .utils.distance_utils import distance
-
+from django.core.files.base import ContentFile
+import shortuuid
+import qrcode
+from io import BytesIO
 
 logger = logging.getLogger(__name__)
 
@@ -319,9 +322,18 @@ class Booking(models.Model):
     # prevent double payment and impotency
     payment_expires_at = models.DateTimeField(blank=True, null=True)
     payment_attempts = models.PositiveIntegerField(default=0)
+
     tracking_number = models.CharField(
         max_length=20, unique=True, blank=True, null=True, db_index=True
     )
+
+    qr_code_url = models.URLField(
+        blank=True, null=True, unique=True
+    )  # New field: Stores URL to generated QR image (e.g., 'https://s3.amazonaws.com/qr/booking-uuid.png')
+
+    assigned_qr_code = models.CharField(
+        max_length=22, blank=True, null=True, unique=True
+    )  # For adopted random code (shortuuid)
 
     class Meta:
         indexes = [
@@ -345,7 +357,7 @@ class Booking(models.Model):
 
     def get_tracking_url(self):
         """Full absolute URL for tracking/verification"""
-        base = getattr(settings, 'SITE_BASE_URL', 'http://localhost:8000')
+        base = getattr(settings, "SITE_BASE_URL", "http://localhost:8000")
         # Option 1: Use UUID (recommended - secure & unique)
         return f"{base}/bookings/track/{self.id}/"
 
@@ -355,6 +367,73 @@ class Booking(models.Model):
     def get_qr_content(self):
         """What the QR code actually encodes - just the full URL"""
         return self.get_tracking_url()
+
+    def generate_qr(self, force_regenerate=False):
+        """
+        Generate QR code pointing to tracking page.
+        Stores either in media folder or uploads to cloud storage.
+        """
+        if self.qr_code_url and not force_regenerate:
+            logger.debug(f"QR already exists for booking {self.id} → skipping")
+            return self.qr_code_url
+
+        # Decide which code to embed
+        code = self.assigned_qr_code
+        if not code:
+            if self.tracking_number:
+                code = self.tracking_number
+            else:
+                # Very last fallback – use short uuid
+                code = f"BK-{shortuuid.uuid()[:8].upper()}"
+                self.tracking_number = code   # also save it
+                self.save(update_fields=['tracking_number'])
+
+        tracking_url = f"{settings.FRONTEND_URL.rstrip('/')}/track/{code}"
+
+        # ─── Generate QR image ───────────────────────────────────────
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            box_size=10,
+            border=4,
+        )
+        qr.add_data(tracking_url)
+        qr.make(fit=True)
+
+        img = qr.make_image(fill_color="black", back_color="white")
+
+        # Save to BytesIO
+        buffer = BytesIO()
+        img.save(buffer, format="PNG")
+        buffer.seek(0)
+
+        # ─── Decide storage backend ──────────────────────────────────
+        filename = f"qr/{self.id}_{code}.png"
+
+        try:
+            # Option A: Using django-storages + S3 / Cloudinary / etc.
+            if hasattr(settings, 'DEFAULT_FILE_STORAGE') and 'storages' in settings.DEFAULT_FILE_STORAGE:
+                from django.core.files.storage import default_storage
+                path = default_storage.save(filename, ContentFile(buffer.getvalue()))
+                public_url = default_storage.url(path)
+            
+            # Option B: Local media (not recommended for production)
+            else:
+                from django.core.files.storage import FileSystemStorage
+                fs = FileSystemStorage(location=settings.MEDIA_ROOT)
+                path = fs.save(filename, ContentFile(buffer.getvalue()))
+                public_url = f"{settings.MEDIA_URL}{path}"
+
+            self.qr_code_url = public_url
+            self.assigned_qr_code = code   # make sure it's saved
+            self.save(update_fields=['qr_code_url', 'assigned_qr_code'])
+
+            logger.info(f"QR generated for booking {self.id}: {public_url}")
+            return public_url
+
+        except Exception as e:
+            logger.exception(f"QR generation failed for booking {self.id}")
+            raise  # Let caller handle or log
 
 
 class RecurrencePeriod(models.TextChoices):
@@ -440,7 +519,7 @@ class BulkUpload(models.Model):
 
 class Route(models.Model):
     driver = models.ForeignKey(
-        "driver.DriverProfile", on_delete=models.SET_NULL, null=True
+        "driver.DriverProfile", on_delete=models.SET_NULL, null=True, related_name='assigned_routes'
     )
     bookings = models.ManyToManyField(Booking)  # Grouped bookings
 
@@ -455,7 +534,7 @@ class Route(models.Model):
     )  # When driver can see it in dashboard
 
     leg_type = models.CharField(
-        choices=[("pickup", "Pickup"), ("delivery", "Delivery")]
+        choices=[("pickup", "Pickup"), ("delivery", "Delivery"), ("mixed", "Mixed")]
     )
     # [{'booking_id': str(uuid), 'address': {'lat': float, 'lng': float}, 'eta': datetime}]
     ordered_stops = models.JSONField(default=list)
@@ -606,53 +685,73 @@ class Route(models.Model):
 
     # update_status method in your Route model
     def update_status(self):
-        if not self.bookings.exists():
-            self.status = "pending"
-            self.save()
-            return
+        """Updates the route status based on associated booking statuses. Handles mixed routes."""
+        statuses = self.bookings.values_list("status", flat=True).distinct()
 
-        statuses = set(self.bookings.values_list("status", flat=True))
-
-        # Define leg_type-specific statuses
-        if self.leg_type == "pickup":
-            progress_statuses = [BookingStatus.PICKED_UP]
-            completed_statuses = [
-                BookingStatus.AT_HUB,
-                BookingStatus.IN_TRANSIT,
-                BookingStatus.DELIVERED,
-                BookingStatus.REFUNDED,
+        if self.leg_type == "mixed":
+            # For mixed: Split by type (using ordered_stops to determine type)
+            pickup_statuses = [
+                b.status
+                for b in self.bookings.all()
+                if self.get_stop_type(b) == "pickup"
             ]
-            completed_status = BookingStatus.AT_HUB  # For logging/reference only
-        elif self.leg_type == "delivery":
-            progress_statuses = [BookingStatus.IN_TRANSIT]
-            completed_statuses = [
-                BookingStatus.DELIVERED,
-                BookingStatus.REFUNDED,
+            delivery_statuses = [
+                b.status
+                for b in self.bookings.all()
+                if self.get_stop_type(b) == "delivery"
             ]
-            completed_status = BookingStatus.DELIVERED  # For logging/reference only
+
+            # Completed if all pickups >= AT_HUB and all deliveries == DELIVERED
+            if all(
+                s
+                in [
+                    BookingStatus.AT_HUB,
+                    BookingStatus.IN_TRANSIT,
+                    BookingStatus.DELIVERED,
+                ]
+                for s in pickup_statuses
+            ) and all(s == BookingStatus.DELIVERED for s in delivery_statuses):
+                self.status = "completed"
+            # Failed if any failed/cancelled
+            elif any(
+                s in [BookingStatus.FAILED, BookingStatus.CANCELLED] for s in statuses
+            ):
+                self.status = "failed"
+            # In progress if some are picked up/in transit
+            elif any(
+                s
+                in [
+                    BookingStatus.PICKED_UP,
+                    BookingStatus.AT_HUB,
+                    BookingStatus.IN_TRANSIT,
+                ]
+                for s in statuses
+            ):
+                self.status = "in_progress"
+            else:
+                self.status = "assigned"  # Default/fallback
         else:
-            # Fallback for other leg_types (if any)
-            progress_statuses = [BookingStatus.PICKED_UP, BookingStatus.IN_TRANSIT]
-            completed_statuses = [BookingStatus.DELIVERED, BookingStatus.REFUNDED]
-            completed_status = BookingStatus.DELIVERED
+            # Existing logic for non-mixed (assumed simple check; adjust if your original differs)
+            if all(s == BookingStatus.DELIVERED for s in statuses):
+                self.status = "completed"
+            elif any(
+                s in [BookingStatus.FAILED, BookingStatus.CANCELLED] for s in statuses
+            ):
+                self.status = "failed"
+            elif all(
+                s
+                in [
+                    BookingStatus.PICKED_UP,
+                    BookingStatus.AT_HUB,
+                    BookingStatus.IN_TRANSIT,
+                ]
+                for s in statuses
+            ):
+                self.status = "in_progress"
+            else:
+                self.status = "assigned"
 
-        # Allow cancelled/failed as "complete" for the purpose of route completion
-        terminal_statuses = [
-            BookingStatus.CANCELLED,
-            BookingStatus.FAILED,
-        ]
-
-        if all(
-            s in completed_statuses + terminal_statuses
-            for s in statuses
-        ):
-            self.status = "completed"
-        elif any(s in progress_statuses for s in statuses):
-            self.status = "in_progress"
-        else:
-            self.status = "assigned"
-
-        self.save()
+        self.save(update_fields=["status"])
 
     def assign_driver(self, driver, commit=True):
         """Helper method to safely assign driver and update related objects."""
@@ -686,7 +785,22 @@ class Route(models.Model):
             self.save(update_fields=["driver", "status", "visible_at"])
 
         return self
-    
+
+    def get_stop_type(self, booking):
+        """Returns 'pickup' or 'delivery' for the given booking on this route. Falls back to leg_type for non-mixed."""
+        if self.leg_type != "mixed":
+            return self.leg_type
+
+        # Search ordered_stops JSON for the booking and return its 'type'
+        for stop in self.ordered_stops:
+            if stop.get("booking_id") == str(booking.id):
+                return stop.get("type", self.leg_type)  # Fallback if 'type' missing
+
+        logger.warning(
+            f"Stop type not found for Booking {booking.id} on Route {self.id}"
+        )
+        return self.leg_type  # Ultimate fallback
+
     def get_detailed_stops(self, for_admin=False):
         """
         Returns list of dicts with lat/lng/status for stops.
@@ -694,55 +808,109 @@ class Route(models.Model):
         - Fallback: Sort active bookings by distance (using your distance_utils).
         - for_admin: Include more details like booking_id, status.
         """
-        active_statuses = [BookingStatus.ASSIGNED, BookingStatus.PICKED_UP, BookingStatus.AT_HUB, BookingStatus.IN_TRANSIT]
-        bookings = self.bookings.filter(status__in=active_statuses).select_related('pickup_address', 'dropoff_address')
+        active_statuses = [
+            BookingStatus.ASSIGNED,
+            BookingStatus.PICKED_UP,
+            BookingStatus.AT_HUB,
+            BookingStatus.IN_TRANSIT,
+        ]
+        bookings = self.bookings.filter(status__in=active_statuses).select_related(
+            "pickup_address", "dropoff_address"
+        )
 
         if self.ordered_stops:
             # Map ordered_stops to detailed info
             stops = []
             booking_map = {str(b.id): b for b in bookings}
             for stop in self.ordered_stops:
-                booking_id = stop.get('booking_id')
+                booking_id = stop.get("booking_id")
                 booking = booking_map.get(booking_id)
                 if not booking:
                     continue
-                addr = booking.pickup_address if self.leg_type == 'pickup' else booking.dropoff_address
+                addr = (
+                    booking.pickup_address
+                    if self.leg_type == "pickup"
+                    else booking.dropoff_address
+                )
                 if not addr or not addr.latitude or not addr.longitude:
                     continue
                 stop_detail = {
-                    'booking_id': str(booking.id),
-                    'tracking_number': booking.tracking_number or str(booking.id)[:8],
-                    'type': self.leg_type,
-                    'status': booking.status,
-                    'lat': float(addr.latitude),
-                    'lng': float(addr.longitude),
-                    'address_short': f"{addr.line1[:30]}... {addr.postal_code or ''}".strip(),
+                    "booking_id": str(booking.id),
+                    "tracking_number": booking.tracking_number or str(booking.id)[:8],
+                    "type": stop.get('type', self.leg_type),
+                    "status": booking.status,
+                    "lat": float(addr.latitude),
+                    "lng": float(addr.longitude),
+                    "address_short": f"{addr.line1[:30]}... {addr.postal_code or ''}".strip(),
                 }
                 if for_admin:
-                    stop_detail['customer_name'] = booking.customer.full_name if booking.customer else 'Guest'
-                    stop_detail['scheduled_at'] = booking.scheduled_pickup_at if self.leg_type == 'pickup' else booking.scheduled_dropoff_at
+                    stop_detail["customer_name"] = (
+                        booking.customer.full_name if booking.customer else "Guest"
+                    )
+                    stop_detail["scheduled_at"] = (
+                        booking.scheduled_pickup_at
+                        if self.leg_type == "pickup"
+                        else booking.scheduled_dropoff_at
+                    )
                 stops.append(stop_detail)
             return stops
         else:
             # Fallback sort (use hub as origin)
-            origin_lat, origin_lng = (self.hub.address.latitude, self.hub.address.longitude) if self.hub else (0, 0)
+            origin_lat, origin_lng = (
+                (self.hub.address.latitude, self.hub.address.longitude)
+                if self.hub
+                else (0, 0)
+            )
+
             def sort_key(b):
-                addr = b.pickup_address if self.leg_type == 'pickup' else b.dropoff_address
-                return distance(origin_lat, origin_lng, float(addr.latitude), float(addr.longitude)) if addr.latitude else float('inf')
+                addr = (
+                    b.pickup_address if self.leg_type == "pickup" else b.dropoff_address
+                )
+                return (
+                    distance(
+                        origin_lat,
+                        origin_lng,
+                        float(addr.latitude),
+                        float(addr.longitude),
+                    )
+                    if addr.latitude
+                    else float("inf")
+                )
+
             sorted_bookings = sorted(bookings, key=sort_key)
             return [  # Same structure as above
                 {
-                    'booking_id': str(b.id),
-                    'tracking_number': b.tracking_number or str(b.id)[:8],
-                    'type': self.leg_type,
-                    'status': b.status,
-                    'lat': float(addr.latitude),
-                    'lng': float(addr.longitude),
-                    'address_short': f"{addr.line1[:30]}... {addr.postal_code or ''}".strip(),
-                    **({'customer_name': b.customer.full_name if b.customer else 'Guest',
-                        'scheduled_at': b.scheduled_pickup_at if self.leg_type == 'pickup' else b.scheduled_dropoff_at} if for_admin else {})
-                } for b in sorted_bookings
-                if (addr := (b.pickup_address if self.leg_type == 'pickup' else b.dropoff_address)) and addr.latitude
+                    "booking_id": str(b.id),
+                    "tracking_number": b.tracking_number or str(b.id)[:8],
+                    "type": self.leg_type,
+                    "status": b.status,
+                    "lat": float(addr.latitude),
+                    "lng": float(addr.longitude),
+                    "address_short": f"{addr.line1[:30]}... {addr.postal_code or ''}".strip(),
+                    **(
+                        {
+                            "customer_name": (
+                                b.customer.full_name if b.customer else "Guest"
+                            ),
+                            "scheduled_at": (
+                                b.scheduled_pickup_at
+                                if self.leg_type == "pickup"
+                                else b.scheduled_dropoff_at
+                            ),
+                        }
+                        if for_admin
+                        else {}
+                    ),
+                }
+                for b in sorted_bookings
+                if (
+                    addr := (
+                        b.pickup_address
+                        if self.leg_type == "pickup"
+                        else b.dropoff_address
+                    )
+                )
+                and addr.latitude
             ]
 
 
@@ -764,11 +932,13 @@ def update_shift_status(sender, instance, **kwargs):
 class ProofOfDelivery(models.Model):
     pass
 
+
 class PricingRule(models.Model):
     """
     One row per “pricing knob”.  The admin can change any of these
     without touching code.
     """
+
     KEY_CHOICES = [
         ("WEIGHT_PER_KG", "Weight charge per kg"),
         ("DISTANCE_PER_KM", "Distance charge per km"),
