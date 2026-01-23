@@ -1,6 +1,8 @@
 from decimal import Decimal
 
 from django.http import HttpResponse
+import qrcode
+from io import BytesIO
 from drf_yasg import openapi  # type: ignore
 from drf_yasg.utils import swagger_auto_schema
 from driver.models import DriverProfile, DriverShift
@@ -18,8 +20,10 @@ from django.db import transaction  # type: ignore
 import logging  # type: ignore
 from driver.permissions import IsDriver  # type: ignore
 from tracking.models import ProofOfDelivery
-from qr_code.qrcode.utils import ContactDetail, WifiConfig   # not needed here, just showing imports
-from qr_code.qrcode.makers import make_qr
+
+# from qr_code.qrcode.utils import ContactDetail, WifiConfig   # not needed here, just showing imports
+
+from django.conf import settings  # type: ignore
 
 
 import uuid
@@ -28,7 +32,15 @@ from django.utils import timezone  # type: ignore
 from payments.models import PaymentTransaction, PaymentStatus
 from payments.serializers import PaymentTransactionSerializer
 
-from .models import Quote, Booking, RecurringSchedule, BookingStatus, ShippingType, ServiceType, Route
+from .models import (
+    Quote,
+    Booking,
+    RecurringSchedule,
+    BookingStatus,
+    ShippingType,
+    ServiceType,
+    Route,
+)
 from .models import (
     Quote,
     Booking,
@@ -43,7 +55,9 @@ from .serializers import (
     QuoteSerializer,
     BookingCreateSerializer,
     BookingSerializer,
-    RecurringScheduleSerializer, ShippingTypeSerializer, ServiceTypeSerializer,
+    RecurringScheduleSerializer,
+    ShippingTypeSerializer,
+    ServiceTypeSerializer,
     RouteSerializer,
     RecurringScheduleSerializer,
     ShippingTypeSerializer,
@@ -57,7 +71,7 @@ from .utils.utils import (
     build_tracking_timeline,
 )
 
-from django.db.models import Case, When, IntegerField  # type: ignore
+from django.db.models import Case, When, IntegerField, Q  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -595,8 +609,7 @@ def track_parcel(request):
     Public tracking endpoint – no auth, no guest email.
     Query: ?tracking_number=BK-ABC123
     """
-    tracking_number = request.query_params.get(
-        "tracking_number", "").strip().upper()
+    tracking_number = request.query_params.get("tracking_number", "").strip().upper()
 
     if not tracking_number:
         return Response(
@@ -668,170 +681,438 @@ def track_parcel(request):
 
     return Response(payload, status=200)
 
+
 class RouteViewSet(viewsets.ModelViewSet):
     queryset = Route.objects.all()
     serializer_class = RouteSerializer
     permission_classes = [IsAdminOrReadOnly]
 
-    @action(detail=False, methods=['post'], permission_classes=[IsAdminOrReadOnly])
+    @action(detail=False, methods=["post"], permission_classes=[IsAdminOrReadOnly])
     def optimize_now(self, request):
         optimize_bookings.delay()  # Trigger manually
-        return Response({'status': 'Optimization queued'})
+        return Response({"status": "Optimization queued"})
 
     # NEW: Action to get available drivers for a specific route (filtered by hub, active, and availability)
     # Line-by-line details:
     # 1. Decorator: Defines a detail=True action (requires pk for route), GET method, admin-only.
-    @action(detail=True, methods=['get'], permission_classes=[IsAdminOrReadOnly])
+    @action(detail=True, methods=["get"], permission_classes=[IsAdminOrReadOnly])
     def get_available_drivers(self, request, pk=None):
-        # 2. Get the route object using pk (efficient, raises 404 if not found).
         route = self.get_object()
-
-        # 3. Check if route has a hub; if not, return error (prevents invalid filtering).
-        if not route.hub:
-            # NEW: If no hub, can't filter—error or all drivers? Here, error to enforce hub assignment.
-            return Response({"error": "Route has no hub; assign hub first"}, status=400)
-
-        # 4. Query drivers: Filter by same hub and active status (efficient with index on hub/status).
-        # Use select_related for user (name/email) to avoid N+1 queries.
         drivers = DriverProfile.objects.filter(
-            hub=route.hub,
-            status=DriverProfile.Status.ACTIVE
-        ).select_related('user')
+            hub=route.hub, status="active"  # Same hub  # Assuming your model has status
+        ).select_related(
+            "shift"
+        )  # Optimize
 
-        # 5. Calculate remaining hours per driver (can't annotate JSONField directly, so loop).
-        # This is efficient for reasonable driver counts per hub (~10-100); no extra DB hits beyond initial query.
-        available_drivers = []
-        for driver in drivers:
-            # Get/create today's shift (method from DriverShift model).
-            shift = DriverShift.get_or_create_today(driver)
-            # Calculate remaining hours (property: max_hours - current_load['hours']).
-            remaining = shift.remaining_hours  # Assuming remaining_hours is a @property in DriverShift
-            if remaining >= route.total_time_hours:  # Only include if enough hours for this route
-                available_drivers.append((driver, remaining))
+        available = []
+        for d in drivers:
+            shift = DriverShift.get_or_create_today(d)
+            current = shift.current_load or {"weight": 0.0, "volume": 0.0, "hours": 0.0}
+            remaining_weight = (
+                shift.max_weight - current["weight"]
+            )  # Assume max_weight field
+            remaining_volume = shift.max_volume - current["volume"]
 
-        # 6. Sort by remaining hours descending (most available first; pure Python sort after loop).
-        available_drivers.sort(key=lambda x: x[1], reverse=True)
+            if route.leg_type == "mixed":
+                net_weight = 0.0
+                net_volume = 0.0
+                for b in route.bookings.all():
+                    typ = route.get_stop_type(b)
+                    sign = 1 if typ == "pickup" else -1
+                    net_weight += sign * float(b.quote.weight_kg or 0)
+                    net_volume += sign * float(b.quote.volume_m3 or 0)
+                if remaining_weight >= net_weight and remaining_volume >= net_volume:
+                    available.append(d)
+            else:
+                # Non-mixed: Simple positive sum check (original logic)
+                total_weight = sum(
+                    float(b.quote.weight_kg or 0) for b in route.bookings.all()
+                )
+                total_volume = sum(
+                    float(b.quote.volume_m3 or 0) for b in route.bookings.all()
+                )
+                if (
+                    remaining_weight >= total_weight
+                    and remaining_volume >= total_volume
+                ):
+                    available.append(d)
 
-        # 7. Serialize only the drivers (extract from tuples; use context if needed).
-        # Assuming DriverProfileSerializer includes fields like id, user__full_name, hub__name, etc.
-        serializer = DriverProfileSerializer([d[0] for d in available_drivers], many=True)
+        serializer = DriverProfileSerializer(available, many=True)
+        return Response(serializer.data)
 
-        # 8. Return response with hub info, serialized drivers, and count (for frontend pagination/info).
-        return Response({
-            "hub": route.hub.name if route.hub else "None",
-            "available_drivers": serializer.data,
-            "total": len(available_drivers)
-        })
-
-    @action(detail=True, methods=['post'], permission_classes=[IsAdminOrReadOnly])
+    @action(detail=True, methods=["post"], permission_classes=[IsAdminOrReadOnly])
     def assign_driver(self, request, pk=None):
-        # 1. Get the route object (existing).
         route = self.get_object()
+        driver_id = request.data.get("driver_id")
 
-        # 2. Check status (existing: only pending can be assigned).
-        if route.status != 'pending':
-            return Response({"error": "Only pending routes can be assigned"}, status=400)
-
-        # 3. Get driver_id from request data (existing).
-        driver_id = request.data.get('driver_id')
         if not driver_id:
-            return Response({"error": "driver_id is required"}, status=400)
+            return Response(
+                {"error": "driver_id required"}, status=status.HTTP_400_BAD_REQUEST
+            )
 
-        # 4. Fetch driver (existing; 404 if not found).
-        try:
-            driver = DriverProfile.objects.get(id=driver_id)
-        except DriverProfile.DoesNotExist:
-            return Response({"error": "Driver not found"}, status=404)
+        driver = get_object_or_404(DriverProfile, id=driver_id)
 
-        # NEW: Enhanced validation - Check hub match before assignment.
-        # Why? Prevents assigning driver from wrong hub; error-free.
-        if route.hub and driver.hub != route.hub:
-            return Response({"error": "Driver hub mismatch with route hub"}, status=400)
+        # Check if driver available, etc. (add your business rules if missing)
 
-        # 5. Atomic block for transaction safety (existing).
         with transaction.atomic():
-            # 6. Assign driver and update route (existing).
             route.driver = driver
-            route.status = 'assigned'
-            route.visible_at = timezone.now()
-            route.save(update_fields=['driver', 'status', 'visible_at'])
-
-            # 7. Handle shift assignment (existing).
-            if route.shift and not route.shift.driver:
+            if route.shift:
                 route.shift.driver = driver
                 route.shift.status = DriverShift.Status.ASSIGNED
+                # Update load if needed (similar to signals)
+                route.shift.save(update_fields=["driver", "status"])
 
-                # Update shift load (existing).
-                if 'hours' not in route.shift.current_load:
-                    route.shift.current_load = {"weight": 0.0, "volume": 0.0, "hours": 0.0}
-
-                route.shift.current_load['hours'] = round(
-                    route.shift.current_load['hours'] + route.total_time_hours, 2
+            # Updated: Bookings with mixed support
+            if route.leg_type == "mixed":
+                updated = 0
+                for booking in route.bookings.all():
+                    typ = route.get_stop_type(booking)
+                    booking_status = (
+                        BookingStatus.ASSIGNED
+                        if typ == "pickup"
+                        else BookingStatus.IN_TRANSIT
+                    )
+                    booking.driver = driver
+                    booking.hub = driver.hub
+                    booking.updated_at = timezone.now()
+                    booking.status = booking_status
+                    booking.save()
+                    updated += 1
+            else:
+                booking_status = (
+                    BookingStatus.ASSIGNED
+                    if route.leg_type == "pickup"
+                    else (
+                        BookingStatus.IN_TRANSIT
+                        if route.leg_type == "delivery"
+                        else BookingStatus.ASSIGNED
+                    )  # fallback
                 )
-                route.shift.save(update_fields=['driver', 'status', 'current_load'])
+                updated = route.bookings.update(
+                    driver=driver,
+                    hub=driver.hub,
+                    updated_at=timezone.now(),
+                    status=booking_status,
+                )
 
-            # Update bookings — IMPORTANT PART
-            booking_status = (
-                BookingStatus.ASSIGNED if route.leg_type == 'pickup' else
-                BookingStatus.IN_TRANSIT if route.leg_type == 'delivery' else
-                BookingStatus.ASSIGNED  # fallback
-            )
-
-            # 8. Update bookings (existing; uses driver.hub for hub update).
-            updated = route.bookings.update(
-                driver=driver,
-                hub=driver.hub,  # Use driver.hub since shift has no hub
-                updated_at=timezone.now(),
-                status=booking_status
-            )
-
-            # NEW: Re-save route to trigger validation in Route.save() (post-assignment).
-            # Why? Ensures hub consistency after updates; raises if mismatch (atomic rollback).
+            # Re-save route for validation (your NEW comment)
             route.save()
 
-            # 9. Log assignment (existing).
             logger.info(
                 f"Admin manually assigned Route {route.id} to Driver {driver.user.get_full_name()} "
                 f"({driver.user.email}). Updated {updated} bookings."
             )
 
-        # 10. Return success response (existing).
-        return Response({
-            "success": True,
-            "route_id": str(route.id),
-            "driver": driver.user.get_full_name(),
-            "bookings_updated": updated,
-            "new_booking_status": booking_status,
-            "shift_assigned": route.shift.driver_id is not None if route.shift else False
-        })
+        return Response(
+            {
+                "success": True,
+                "route_id": str(route.id),
+                "driver": driver.user.get_full_name(),
+                "bookings_updated": updated,
+                "new_booking_status": (
+                    booking_status
+                    if "booking_status" in locals()
+                    else "mixed (per-type)"
+                ),
+                "shift_assigned": (
+                    route.shift.driver_id is not None if route.shift else False
+                ),
+            }
+        )
 
-# class BookingQRCodeView(APIView):
-#     def get(self, request, pk):
-#         booking = get_object_or_404(Booking, pk=pk)
-#         qr_image = make_qr(booking.get_qr_content(), size="L", error_correction="H")
-#
-#         response = HttpResponse(content_type="image/png")
-#         qr_image.save(response, "PNG")
-#         return response
+    @action(detail=True, methods=["get"], permission_classes=[IsDriver])
+    def get_route_details(self, request, pk=None):
+        route = self.get_object()
+        if route.driver.user != request.user:
+            return Response(
+                {"error": "Not your route"}, status=status.HTTP_403_FORBIDDEN
+            )
 
+        # Use detailed_stops (includes type from serializers update)
+        details = route.get_detailed_stops(for_admin=False)
+        for stop in details:
+            stop["qr_prompt"] = (
+                True if stop["type"] in ["pickup", "delivery"] else False
+            )  # Prompt for scan
+
+        return Response(
+            {
+                "route_id": str(route.id),
+                "leg_type": route.leg_type,
+                "total_hours": route.total_time_hours,
+                "total_km": route.total_distance_km,
+                "stops": details,
+            }
+        )
+
+
+class BookingQRCodeView(APIView):
+    permission_classes = [IsAuthenticated]  # Or IsDriver/IsCustomer
+
+    def get(self, request, pk):
+        booking = get_object_or_404(Booking, pk=pk)
+        if not booking.qr_code_url:
+            booking.generate_qr()
+
+        # Generate on-the-fly as fallback or always
+        code = booking.assigned_qr_code or booking.tracking_number or str(booking.id)
+        qr_content = f"{settings.FRONTEND_URL}/track/{code}"
+
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_H,
+            box_size=10,
+            border=4,
+        )
+        qr.add_data(qr_content)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+
+        response = HttpResponse(content_type="image/png")
+        img.save(response, "PNG")
+        return response
+
+
+# Un-comment + enhance booking_qr_code (similar fallback)
 def booking_qr_code(request, pk):
+    """
+    Function-based view to serve a QR code image for a booking.
+
+    - Generates on-the-fly if qr_code_url is missing.
+    - Supports query params: ?size=M/L/H & ?format=png/svg
+    - Uses assigned_qr_code if set (for random QR adoption), else tracking_number or ID.
+    - Returns PNG or SVG based on format.
+    - Logs generation for debugging.
+    """
     booking = get_object_or_404(Booking, pk=pk)
-    qr_content = booking.get_qr_content()
 
-    size = request.GET.get('size', 'M')  # M, L, H, 200x200, 6cm...
-    format = request.GET.get('format', 'png')  # 'png' or 'svg'
+    # Fallback: Generate if no stored URL
+    if not booking.qr_code_url:
+        try:
+            booking.generate_qr(force_regenerate=True)
+            logger.info(f"Generated QR on-the-fly for Booking {booking.id}")
+        except Exception as e:
+            logger.error(f"Failed to generate QR for Booking {booking.id}: {e}")
+            return HttpResponse("QR generation failed", status=500)
 
-    qr_image = make_qr(
-        qr_content,
-        size=size,
-        error_correction="H",
-        image_format=format.upper(),  # PNG or SVG
+    # Determine QR content (prefer assigned_qr_code if set)
+    code = booking.assigned_qr_code or booking.tracking_number or str(booking.id)
+    qr_content = f"{settings.FRONTEND_URL}/track/{code}"
+
+    # Get params from query string
+    size_param = request.GET.get("size", "M").upper()  # M, L, H
+    format_param = request.GET.get("format", "png").lower()
+
+    # Map size to box_size (adjust as needed)
+    size_map = {"M": 10, "L": 15, "H": 20}
+    box_size = size_map.get(size_param, 10)  # Default M
+
+    # Generate QR
+    qr = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_H,
+        box_size=box_size,
+        border=4,
     )
+    qr.add_data(qr_content)
+    qr.make(fit=True)
 
-    content_type = "image/svg+xml" if format == "svg" else "image/png"
-    extension = "svg" if format == "svg" else "png"
+    # Create image
+    img = qr.make_image(fill_color="black", back_color="white")
 
-    response = HttpResponse(content_type=content_type)
-    qr_image.save(response, extension.upper())
+    # Prepare response
+    if format_param == "svg":
+        # SVG output (requires qrcode[pil] + svgwrite or similar, but qrcode doesn't support SVG natively)
+        # Fallback to PNG if SVG not supported — or install qrcode-svg if needed
+        content_type = "image/png"
+        extension = "png"
+        buffer = BytesIO()
+        img.save(buffer, format="PNG")
+    else:
+        content_type = "image/png"
+        extension = "png"
+        buffer = BytesIO()
+        img.save(buffer, format="PNG")
 
+    buffer.seek(0)
+
+    response = HttpResponse(buffer, content_type=content_type)
+    response["Content-Disposition"] = (
+        f'inline; filename="booking_{booking.id}_qr.{extension}"'
+    )
     return response
+
+
+# New: Scan API
+@api_view(["POST"])
+@permission_classes([IsDriver])
+def scan_qr(request):
+    """
+    API endpoint for drivers to scan QR codes on parcels during pickup or delivery.
+
+    Supported flows:
+    1. Original QR (from customer email/print):
+       - Parses URL → finds booking by tracking_number or assigned_qr_code
+       - Validates driver owns the route
+       - Updates status (PICKED_UP for pickup stops, DELIVERED for delivery stops)
+    2. Random QR (pre-printed by driver, when customer forgot to print):
+       - If no match → treats qr_content as new unique code
+       - Checks if code already used (uniqueness)
+       - Assigns to booking.assigned_qr_code
+       - Re-generates qr_code_url with new code
+       - Updates status (same as above)
+
+    Request body (JSON):
+    {
+        "qr_content": "https://yourdomain/track/ABC123"   // or plain code "abc123def456"
+        "booking_id": "550e8400-e29b-41d4-a716-446655440000"  // required for context
+    }
+
+    Response (200 OK):
+    {
+        "success": true,
+        "booking_id": "550e8400-e29b-41d4-a716-446655440000",
+        "new_status": "picked_up"  // or "delivered"
+    }
+
+    Errors:
+    - 400: Missing/invalid qr_content or booking_id
+    - 403: Not the driver's route/booking
+    - 400: Invalid stop type
+    - 400: Random code already assigned
+    - 500: Internal error (logged)
+
+    Security: Only authenticated drivers can call.
+    Atomicity: All DB writes in one transaction.
+    """
+    # 1. Extract required fields from request
+    qr_content = request.data.get("qr_content")
+    booking_id = request.data.get("booking_id")
+
+    if not qr_content:
+        return Response({"error": "qr_content is required"}, status=400)
+
+    if not booking_id:
+        return Response({"error": "booking_id is required"}, status=400)
+
+    # 2. Fetch booking and route — early validation
+    booking = get_object_or_404(Booking, id=booking_id)
+
+    # Get the route this booking belongs to (assume one route per booking)
+    route = booking.route_set.first()
+    if not route:
+        return Response({"error": "Booking is not assigned to any route"}, status=400)
+
+    # Ensure the current user (driver) owns this route
+    if route.driver.user != request.user:
+        return Response({"error": "You are not assigned to this route"}, status=403)
+
+    # 3. Wrap everything in atomic transaction (critical for random assign + status update)
+    with transaction.atomic():
+        # 4. Parse the scanned QR content
+        parsed = parse_qr_content(qr_content)
+
+        if isinstance(parsed, str):  # ← Random code case (plain string)
+            # Uniqueness check — prevent reuse of the same pre-printed code
+            if Booking.objects.filter(assigned_qr_code=parsed).exists():
+                return Response(
+                    {
+                        "error": "This random QR code is already assigned to another parcel"
+                    },
+                    status=400,
+                )
+
+            # Assign the random code to this booking
+            booking.assigned_qr_code = parsed
+
+            # Re-generate the QR image with the new code embedded in the URL
+            booking.generate_qr(force_regenerate=True)
+
+            # Save both fields
+            booking.save(update_fields=["assigned_qr_code", "qr_code_url"])
+
+            logger.info(
+                f"Random QR code '{parsed}' assigned to Booking {booking.id} "
+                f"by driver {request.user.get_full_name()} (ID: {request.user.id})"
+            )
+
+        elif (
+            parsed and parsed == booking.id
+        ):  # ← Valid match (original or previously assigned QR)
+            logger.info(
+                f"Valid QR scan for Booking {booking.id} by driver {request.user.get_full_name()}"
+            )
+            # No assignment needed — proceed to status update
+
+        else:
+            # Invalid QR content — tell app to prompt random scan
+            return Response(
+                {"error": "Invalid QR code - try scanning a random one?"}, status=400
+            )
+
+        # 5. Determine stop type and update booking status
+        stop_type = route.get_stop_type(booking)
+
+        if stop_type == "pickup":
+            new_status = BookingStatus.PICKED_UP
+        elif stop_type == "delivery":
+            new_status = BookingStatus.DELIVERED
+        else:
+            return Response(
+                {"error": f"Invalid stop type '{stop_type}' for this booking"},
+                status=400,
+            )
+
+        # Apply status change
+        booking.status = new_status
+        booking.updated_at = timezone.now()
+        booking.save(update_fields=["status", "updated_at"])
+
+        # Log final success
+        logger.info(
+            f"QR scan successful for Booking {booking.id} "
+            f"(type: {stop_type}, new status: {new_status}) "
+            f"by driver {request.user.get_full_name()}"
+        )
+
+        # 6. Return success response
+        return Response(
+            {
+                "success": True,
+                "booking_id": str(booking.id),
+                "new_status": new_status,
+                "qr_url": booking.qr_code_url,  # Optional: return updated QR if regenerated
+            },
+            status=200,
+        )
+
+
+# Helper (add to views or utils.py)
+def parse_qr_content(qr_content):
+    # e.g., "https://site/track/ABC123" → "ABC123" → query Booking.tracking_number == "ABC123" → return id
+    if "/track/" in qr_content:
+        code = qr_content.split("/track/")[-1]
+        try:
+            # Check both tracking_number and assigned_qr_code
+            booking = Booking.objects.get(
+                Q(tracking_number=code) | Q(assigned_qr_code=code)
+            )
+            return booking.id
+        except Booking.DoesNotExist:
+            return None
+    else:
+        # Random code (plain string, e.g., 'abc123def')
+        return qr_content  # Return code itself for assign check
+
+
+# New: Regenerate QR for "random" cases
+@api_view(["POST"])
+@permission_classes([IsDriver])
+def regenerate_qr(request, booking_id):
+    booking = get_object_or_404(Booking, id=booking_id)
+    route = booking.route_set.first()
+    if not route or route.driver.user != request.user:
+        return Response({"error": "Not your booking"}, status=403)
+
+    new_url = booking.generate_qr(force_regenerate=True)
+    return Response({"success": True, "new_qr_url": new_url})
