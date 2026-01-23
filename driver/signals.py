@@ -1,5 +1,6 @@
 from django.db.models.signals import post_save
 from django.dispatch import receiver
+from django.db import transaction
 from bookings.models import Booking, BookingStatus, Route
 from driver.models import DriverShift, DriverProfile, DriverAvailability, DriverLocation
 from channels.layers import get_channel_layer
@@ -145,19 +146,32 @@ def handle_route_assignment(sender, instance, **kwargs):
         driver.recompute_availability()
         if not driver.is_tracking_enabled:
             driver.is_tracking_enabled = True
-            driver.save(update_fields=['is_tracking_enabled'])
+            driver.save(update_fields=["is_tracking_enabled"])
 
 
 @receiver(post_save, sender=Route)
-def handle_route_completion(sender, instance, **kwargs):
-    if instance.driver and instance.status in ["completed", "cancelled"]:
+def handle_manual_or_cascaded_route_completion(sender, instance, **kwargs):
+    """
+    Handles manual/admin completion or cancellation of route.
+    Slim version — only affects driver tracking/availability.
+    """
+    if instance.status not in ["completed", "cancelled"]:
+        return
+
+    if not instance.driver:
+        return
+
+    with transaction.atomic():
         driver = instance.driver
         driver.recompute_availability()
-        if not Route.objects.filter(
+
+        has_active = Route.objects.filter(
             driver=driver, status__in=["assigned", "in_progress"]
-        ).exists():
+        ).exists()
+
+        if not has_active and driver.is_tracking_enabled:
             driver.is_tracking_enabled = False
-            driver.save()
+            driver.save(update_fields=["is_tracking_enabled"])
 
 
 @receiver(post_save, sender=Booking)
@@ -182,19 +196,19 @@ def handle_booking_assignment(sender, instance, **kwargs):
 @receiver(post_save, sender=Booking)
 def handle_booking_completion(sender, instance, **kwargs):
     if instance.driver and instance.status in [
-        BookingStatus.COMPLETED,
+        BookingStatus.DELIVERED,
         BookingStatus.CANCELLED,
     ]:
         driver = instance.driver
-        driver.recompute_availability() # Sets available=True if no active bookings/routes
+        driver.recompute_availability()  # Sets available=True if no active bookings/routes
         has_active = (
             Route.objects.filter(
                 driver=driver,
-                status__in=[BookingStatus.ASSIGNED, BookingStatus.IN_PROGRESS],
+                status__in=[BookingStatus.ASSIGNED, BookingStatus.PICKED_UP],
             ).exists()
             or Booking.objects.filter(
                 driver=driver,
-                status__in=[BookingStatus.ASSIGNED, BookingStatus.IN_PROGRESS],
+                status__in=[BookingStatus.ASSIGNED, BookingStatus.PICKED_UP],
             ).exists()
         )
         if not has_active and driver.is_tracking_enabled:
