@@ -1,88 +1,284 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Booking Confirmed - Drop 'N Roll</title>
+  </head>
 
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Booking Confirmed - Drop 'N Roll</title>
-</head>
+  <body
+    style="
+      margin: 0;
+      padding: 0;
+      background-color: #f4f4f4;
+      font-family: Arial, sans-serif;
+    "
+  >
+    <table
+      role="presentation"
+      width="100%"
+      cellspacing="0"
+      cellpadding="0"
+      border="0"
+      style="background-color: #f4f4f4"
+    >
+      <tr>
+        <td style="padding: 20px 0">
+          <table
+            role="presentation"
+            width="600"
+            cellspacing="0"
+            cellpadding="0"
+            border="0"
+            align="center"
+            style="
+              background-color: #ffffff;
+              border-radius: 8px;
+              box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            "
+          >
+            <!-- Header -->
+            <tr>
+              <td
+                style="
+                  padding: 40px 40px 20px;
+                  text-align: center;
+                  background-color: #4caf50;
+                  border-radius: 8px 8px 0 0;
+                "
+              >
+                <h1
+                  style="
+                    margin: 0;
+                    color: #ffffff;
+                    font-size: 24px;
+                    font-weight: bold;
+                  "
+                >
+                  Booking #{{ booking.id }} Confirmed!
+                </h1>
+              </td>
+            </tr>
+            <!-- Body -->
+            <tr>
+              <td
+                style="
+                  padding: 40px;
+                  color: #333333;
+                  line-height: 1.6;
+                  font-size: 16px;
+                "
+              >
+                <h2 style="margin: 0 0 20px; color: #4caf50; font-size: 20px">
+                  Details:
+                </h2>
+                <table
+                  role="presentation"
+                  width="100%"
+                  cellspacing="0"
+                  cellpadding="10"
+                  border="0"
+                  style="
+                    margin-bottom: 20px;
+                    border: 1px solid #e9ecef;
+                    border-radius: 4px;
+                  "
+                >
+                  <tr>
+                    <td
+                      style="
+                        border-bottom: 1px solid #e9ecef;
+                        font-weight: bold;
+                      "
+                    >
+                      Pickup:
+                    </td>
+                    <td>
+                      {{ booking.pickup_address.line1 }}, {{
+                      booking.pickup_address.city }}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td
+                      style="
+                        border-bottom: 1px solid #e9ecef;
+                        font-weight: bold;
+                      "
+                    >
+                      Dropoff:
+                    </td>
+                    <td>
+                      {{ booking.dropoff_address.line1 }}, {{
+                      booking.dropoff_address.city }}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td
+                      style="
+                        border-bottom: 1px solid #e9ecef;
+                        font-weight: bold;
+                      "
+                    >
+                      Weight:
+                    </td>
+                    <td>{{ booking.quote.weight_kg }} kg</td>
+                  </tr>
+                  <tr>
+                    <td
+                      style="
+                        border-bottom: 1px solid #e9ecef;
+                        font-weight: bold;
+                      "
+                    >
+                      Service:
+                    </td>
+                    <td>{{ booking.quote.service_type.name }}</td>
+                  </tr>
+                  <tr>
+                    <td
+                      style="
+                        border-bottom: 1px solid #e9ecef;
+                        font-weight: bold;
+                      "
+                    >
+                      Scheduled Pickup:
+                    </td>
+                    <td>{{ booking.scheduled_pickup_at|date:"M d, Y H:i" }}</td>
+                  </tr>
+                  <tr>
+                    <td style="font-weight: bold">Total:</td>
+                    <td style="color: #4caf50; font-weight: bold">
+                      £{{ booking.final_price }}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td
+                      style="padding: 20px 40px; border-top: 1px solid #e9ecef"
+                    >
+                      <h2
+                        style="
+                          margin: 0 0 10px;
+                          font-size: 18px;
+                          color: #333333;
+                        "
+                      >
+                        Your Parcel QR Code
+                      </h2>
+                      <p
+                        style="
+                          margin: 0 0 20px;
+                          color: #666666;
+                          font-size: 14px;
+                        "
+                      >
+                        Print and stick this QR code on your parcel for easy
+                        identification. If not, the driver can assign one.
+                      </p>
+                      {% if qr_url %}
+                      <img
+                        src="{{ qr_url }}"
+                        alt="Parcel QR Code"
+                        style="
+                          display: block;
+                          margin: 0 auto;
+                          width: 150px;
+                          height: 150px;
+                        "
+                      />
+                      <p
+                        style="
+                          text-align: center;
+                          margin: 10px 0 0;
+                          font-size: 12px;
+                        "
+                      >
+                        <a href="{{ qr_url }}" style="color: #4caf50"
+                          >Download QR Code</a
+                        >
+                      </p>
+                      {% else %}
+                      <p style="color: #ff9800">
+                        QR code generation failed - contact support.
+                      </p>
+                      {% endif %}
+                    </td>
+                  </tr>
+                </table>
+                <p
+                  style="
+                    margin: 0 0 20px;
+                    font-size: 18px;
+                    color: #4caf50;
+                    font-weight: bold;
+                  "
+                >
+                  Payment: Successful (Ref: {{ payment.reference }}) – Amount:
+                  £{{ payment.amount }}
+                </p>
+                <p style="margin: 0 0 30px; font-size: 16px; color: #666666">
+                  Status: Scheduled. Track your booking
+                  <a
+                    href="{{ site_url }}/track/{{ booking.id }}"
+                    style="color: #2196f3; text-decoration: none"
+                    >here</a
+                  >.
+                </p>
 
-<body style="margin: 0; padding: 0; background-color: #f4f4f4; font-family: Arial, sans-serif;">
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #f4f4f4;">
-    <tr>
-      <td style="padding: 20px 0;">
-        <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" align="center"
-          style="background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-          <!-- Header -->
-          <tr>
-            <td
-              style="padding: 40px 40px 20px; text-align: center; background-color: #4CAF50; border-radius: 8px 8px 0 0;">
-              <h1 style="margin: 0; color: #ffffff; font-size: 24px; font-weight: bold;">Booking #{{ booking.id }}
-                Confirmed!</h1>
-            </td>
-          </tr>
-          <!-- Body -->
-          <tr>
-            <td style="padding: 40px; color: #333333; line-height: 1.6; font-size: 16px;">
-              <h2 style="margin: 0 0 20px; color: #4CAF50; font-size: 20px;">Details:</h2>
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="10" border="0"
-                style="margin-bottom: 20px; border: 1px solid #e9ecef; border-radius: 4px;">
-                <tr>
-                  <td style="border-bottom: 1px solid #e9ecef; font-weight: bold;">Pickup:</td>
-                  <td>{{ booking.pickup_address.line1 }}, {{ booking.pickup_address.city }}</td>
-                </tr>
-                <tr>
-                  <td style="border-bottom: 1px solid #e9ecef; font-weight: bold;">Dropoff:</td>
-                  <td>{{ booking.dropoff_address.line1 }}, {{ booking.dropoff_address.city }}</td>
-                </tr>
-                <tr>
-                  <td style="border-bottom: 1px solid #e9ecef; font-weight: bold;">Weight:</td>
-                  <td>{{ booking.quote.weight_kg }} kg</td>
-                </tr>
-                <tr>
-                  <td style="border-bottom: 1px solid #e9ecef; font-weight: bold;">Service:</td>
-                  <td>{{ booking.quote.service_type.name }}</td>
-                </tr>
-                <tr>
-                  <td style="border-bottom: 1px solid #e9ecef; font-weight: bold;">Scheduled Pickup:</td>
-                  <td>{{ booking.scheduled_pickup_at|date:"M d, Y H:i" }}</td>
-                </tr>
-                <tr>
-                  <td style="font-weight: bold;">Total:</td>
-                  <td style="color: #4CAF50; font-weight: bold;">£{{ booking.final_price }}</td>
-                </tr>
-              </table>
-              <p style="margin: 0 0 20px; font-size: 18px; color: #4CAF50; font-weight: bold;">Payment: Successful (Ref:
-                {{ payment.reference }}) – Amount: £{{ payment.amount }}</p>
-              <p style="margin: 0 0 30px; font-size: 16px; color: #666666;">Status: Scheduled. Track your booking <a
-                  href="{{ site_url }}/track/{{ booking.id }}" style="color: #2196F3; text-decoration: none;">here</a>.
-              </p>
-              <!-- CTA Button -->
-              <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: 0 auto 30px;">
-                <tr>
-                  <td style="background-color: #4CAF50; border-radius: 5px; text-align: center;">
-                    <a href="{{ site_url }}/track/{{ booking.id }}"
-                      style="display: inline-block; padding: 15px 30px; color: #ffffff; text-decoration: none; font-weight: bold; font-size: 16px;">Track
-                      Booking</a>
-                  </td>
-                </tr>
-              </table>
-              <p style="margin: 0; font-size: 14px; color: #666666;">Questions? Reply to this email or contact {{
-                support_email }}.</p>
-            </td>
-          </tr>
-          <!-- Footer -->
-          <tr>
-            <td
-              style="padding: 20px 40px; text-align: center; background-color: #f8f9fa; border-radius: 0 0 8px 8px; border-top: 1px solid #e9ecef;">
-              <p style="margin: 0; color: #666666; font-size: 12px;">The Drop 'N Roll Team | {{ support_email }} | {{
-                site_url }}</p>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-
+                <!-- CTA Button -->
+                <table
+                  role="presentation"
+                  cellspacing="0"
+                  cellpadding="0"
+                  border="0"
+                  style="margin: 0 auto 30px"
+                >
+                  <tr>
+                    <td
+                      style="
+                        background-color: #4caf50;
+                        border-radius: 5px;
+                        text-align: center;
+                      "
+                    >
+                      <a
+                        href="{{ site_url }}/track/{{ booking.id }}"
+                        style="
+                          display: inline-block;
+                          padding: 15px 30px;
+                          color: #ffffff;
+                          text-decoration: none;
+                          font-weight: bold;
+                          font-size: 16px;
+                        "
+                        >Track Booking</a
+                      >
+                    </td>
+                  </tr>
+                </table>
+                <p style="margin: 0; font-size: 14px; color: #666666">
+                  Questions? Reply to this email or contact {{ support_email }}.
+                </p>
+              </td>
+            </tr>
+            <!-- Footer -->
+            <tr>
+              <td
+                style="
+                  padding: 20px 40px;
+                  text-align: center;
+                  background-color: #f8f9fa;
+                  border-radius: 0 0 8px 8px;
+                  border-top: 1px solid #e9ecef;
+                "
+              >
+                <p style="margin: 0; color: #666666; font-size: 12px">
+                  The Drop 'N Roll Team | {{ support_email }} | {{ site_url }}
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
 </html>
