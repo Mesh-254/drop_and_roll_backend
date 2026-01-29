@@ -347,6 +347,7 @@ UNFOLD = {
             "300": "253, 186, 116",  # Light orange
             "400": "251, 146, 60",  # Medium orange
             "500": "249, 115, 22",  # Orange (#F97316)
+            "500": "14, 165, 233", # Core blue (#0ea5e9)
             "600": "234, 88, 12",  # Darker orange
             "700": "194, 65, 12",  # Dark orange
             "800": "154, 52, 18",  # Very dark orange
