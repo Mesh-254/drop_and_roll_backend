@@ -23,7 +23,7 @@ from django.core.paginator import Paginator
 from decimal import Decimal
 from django.shortcuts import get_object_or_404
 from bookings.models import BookingStatus
-from payments.models import PaymentStatus
+from payments.models import PaymentStatus, PaymentTransaction
 from payments.api_views import RefundSerializer
 from payments.models import PaymentStatus, Refund
 from .models import Route, Hub
@@ -255,6 +255,31 @@ class PostcodeFilter(SimpleListFilter):
         return queryset
 
 
+
+# New: Inline for Refunds (nested in PaymentTransactionInline)
+class RefundInline(admin.TabularInline):
+    model = Refund
+    extra = 0
+    fields = ('amount', 'reason', 'status', 'created_at')
+    readonly_fields = ('created_at',)
+    can_delete = False  # Prevent accidental deletion
+    verbose_name = "Refund"
+    verbose_name_plural = "Refunds"
+
+
+
+# New: Inline for PaymentTransactions (shown in Booking detail view)
+class PaymentTransactionInline(admin.TabularInline):
+    model = PaymentTransaction
+    extra = 0
+    fields = ('amount', 'status', 'reference', 'created_at')
+    readonly_fields = ('reference', 'created_at')
+    inlines = [RefundInline]  # Nest Refunds under Payments
+    can_delete = False
+    verbose_name = "Payment Transaction"
+    verbose_name_plural = "Payment Transactions"
+
+
 @admin.register(Booking)
 class BookingAdmin(ModelAdmin):
     list_display = (
@@ -263,15 +288,17 @@ class BookingAdmin(ModelAdmin):
         "get_hub",
         "get_driver_name",
         "status_badge",
+        "get_service_type_name",
         "final_price",
         "created_at",
         "pod_link",
-        "refund_link",
+        # "refund_link", # Removed "refund_link" to move refund to detail view only
     )
     list_filter = (PostcodeFilter, "status", "quote__service_type__name", "created_at", "hub__name")
     search_fields = ("id", "customer__email", "customer__full_name", "guest_email", "pickup_address__postal_code",  # New
-        "dropoff_address__postal_code")
-    readonly_fields = ("created_at", "updated_at")
+        "dropoff_address__postal_code", "tracking_number")
+    readonly_fields = ("created_at", "updated_at", "refund_link")
+    inlines = [PaymentTransactionInline]  # NEW: Added inline for payments/refunds in detail view
 
     ordering = ["-created_at"]  # List orders as latest descending
 
@@ -326,7 +353,7 @@ class BookingAdmin(ModelAdmin):
             "delivered": "#16a34a",
             "cancelled": "#ef4444",
             "failed": "#b91c1c",
-            "refunded": "#10b981",  # FIXED: Added for refunded status
+            "refunded": "#b91010",  # FIXED: Added for refunded status
         }.get(obj.status, "#444")
         return format_html(
             '<span style="padding:4px 8px;border-radius:9999px;color:#fff;background:{}">{}</span>',
