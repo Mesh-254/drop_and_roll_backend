@@ -11,7 +11,7 @@ app.autodiscover_tasks()
 app.conf.beat_schedule = {
     'optimize-bookings-every-15-min': {
         'task': 'bookings.tasks.optimize_bookings',
-        'schedule': crontab(minute='*/1'),  # Every 15 minutes
+        'schedule': crontab(hour='*/3'),  # Every 3 hours
     },
     'mark-overdue-shifts': {
         'task': 'bookings.tasks.mark_overdue_shifts',
