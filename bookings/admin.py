@@ -641,9 +641,18 @@ class ShippingTypeAdmin(ModelAdmin):
 
 @admin.register(ServiceType)
 class ServiceTypeAdmin(ModelAdmin):
-    list_display = ("id", "name", "price", "created_at", "updated_at")
+    list_display = ("name", "created_at", "description", "updated_at", "urgency_multiplier", "minimum_price")
+    list_editable = ("urgency_multiplier", "minimum_price")
     search_fields = ("name", "description")
-    list_filter = ("name", "created_at", "updated_at")
+    fieldsets = (
+        (None, {
+            'fields': ('name', 'description')
+        }),
+        ('Pricing Controls', {
+            'fields': ('urgency_multiplier', 'minimum_price', 'legacy_price'),
+            'description': "Controls how much more expensive this service is compared to standard tier pricing."
+        }),
+    )
 
 
 @admin.register(RecurringSchedule)
