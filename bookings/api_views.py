@@ -97,35 +97,57 @@ class QuoteViewSet(viewsets.GenericViewSet):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
-        shipping_type = ShippingType.objects.get(id=data["shipping_type_id"])
-        service_type = ServiceType.objects.get(id=data["service_type_id"])
+        try:
+            shipping_type = ShippingType.objects.get(id=data["shipping_type_id"])
+            service_type_obj = ServiceType.objects.get(id=data["service_type_id"])
+        except ShippingType.DoesNotExist:
+            return Response(
+                {"detail": "Shipping type not found."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except ServiceType.DoesNotExist:
+            return Response(
+                {"detail": "Service type not found."},
+                status=status.HTTP_404_NOT_FOUND
+            )
 
-        base_price, final_price, breakdown = compute_quote(
+        # Calculate price using the updated compute_quote function
+        # (make sure you have the version that supports urgency_multiplier & minimum_price)
+        subtotal, final_price, breakdown = compute_quote(
             shipment_type=shipping_type.name,
-            service_type=service_type.name,
+            service_type=service_type_obj.name,
             weight_kg=data["weight_kg"],
             distance_km=data["distance_km"],
-            fragile=data["fragile"],
-            insurance_amount=data["insurance_amount"],
-            dimensions=data["dimensions"],
-            surge=data["surge"],
-            discount=data["discount"],
+            num_parcels=data.get("num_parcels", 1),
+            insurance_amount=data.get("insurance_amount", Decimal("0")),
+            discount=data.get("discount", Decimal("0")),
+            dimensions=data.get("dimensions", {}),
+            fragile=data.get("fragile", False),  # still passed, even if ignored
         )
 
+        # Create the quote record
         quote = Quote.objects.create(
+            # Core identifiers
             shipping_type=shipping_type,
-            service_type=service_type,
+            service_type=service_type_obj,
+            customer=request.user if request.user.is_authenticated else None,
+
+            # Input values
             weight_kg=data["weight_kg"],
             distance_km=data["distance_km"],
-            fragile=data["fragile"],
-            insurance_amount=data["insurance_amount"],
-            dimensions=data["dimensions"],
-            base_price=base_price,
-            surge_multiplier=data["surge"],
-            discount_amount=data["discount"],
+            num_parcels=data.get("num_parcels", 1),
+            insurance_amount=data.get("insurance_amount", Decimal("0")),
+            discount_amount=data.get("discount", Decimal("0")),
+            dimensions=data.get("dimensions", {}),
+            fragile=data.get("fragile", False),
+
+            # Pricing results
+            base_price=subtotal,           # tier-based subtotal before service adjustment
             final_price=final_price,
-            meta=breakdown,
+            meta=breakdown,                # detailed breakdown (very useful for frontend)
         )
+
+        
         return Response(QuoteSerializer(quote).data, status=status.HTTP_201_CREATED)
 
 
