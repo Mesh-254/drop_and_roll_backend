@@ -110,27 +110,38 @@ class Address(models.Model):
     def __str__(self):
         return f"{self.line1}, {self.city} {self.postal_code or ''}".strip()
 
-
 class ServiceType(models.Model):
-    """Dynamic service types (replaces ServiceTier)."""
-
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    # e.g., "Standard Delivery", "Express 1-Hour"
     name = models.CharField(max_length=100, unique=True)
-    description = models.TextField(blank=True, default="")  # e.g., "Same-Day/Next-Day"
-    price = models.DecimalField(
-        max_digits=10, decimal_places=2, default=Decimal("0.00")
+    description = models.TextField(blank=True, default="")
+    
+    # These two must exist
+    urgency_multiplier = models.DecimalField(
+        max_digits=5,
+        decimal_places=3,
+        default=Decimal("1.000"),
+        verbose_name="Urgency Multiplier",
+        help_text="1.0 = standard, 1.5 = 50% more, etc."
     )
+    
+    minimum_price = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=Decimal("0.00"),
+        verbose_name="Minimum Price",
+        help_text="Final price floor for this service"
+    )
+    
+    # optional legacy field
+    price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, editable=False)
+    
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         verbose_name = "Service Type"
         verbose_name_plural = "Service Types"
-        constraints = [
-            models.UniqueConstraint(fields=["name"], name="unique_service_type_name")
-        ]
-
+    
     def __str__(self):
         return self.name
 
@@ -181,7 +192,11 @@ class Quote(models.Model):
     dimensions = models.JSONField(default=dict, blank=True)
 
     base_price = models.DecimalField(max_digits=10, decimal_places=2)
-    surge_multiplier = models.DecimalField(max_digits=5, decimal_places=2, default=1)
+    num_parcels = models.PositiveIntegerField(
+        default=1,
+        validators=[MinValueValidator(1)],
+        help_text="Number of parcels in the shipment.",
+    )
     discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     final_price = models.DecimalField(max_digits=10, decimal_places=2)
 
@@ -385,8 +400,8 @@ class Booking(models.Model):
             else:
                 # Very last fallback – use short uuid
                 code = f"BK-{shortuuid.uuid()[:8].upper()}"
-                self.tracking_number = code   # also save it
-                self.save(update_fields=['tracking_number'])
+                self.tracking_number = code  # also save it
+                self.save(update_fields=["tracking_number"])
 
         tracking_url = f"{settings.FRONTEND_URL.rstrip('/')}/track/{code}"
 
@@ -412,21 +427,26 @@ class Booking(models.Model):
 
         try:
             # Option A: Using django-storages + S3 / Cloudinary / etc.
-            if hasattr(settings, 'DEFAULT_FILE_STORAGE') and 'storages' in settings.DEFAULT_FILE_STORAGE:
+            if (
+                hasattr(settings, "DEFAULT_FILE_STORAGE")
+                and "storages" in settings.DEFAULT_FILE_STORAGE
+            ):
                 from django.core.files.storage import default_storage
+
                 path = default_storage.save(filename, ContentFile(buffer.getvalue()))
                 public_url = default_storage.url(path)
-            
+
             # Option B: Local media (not recommended for production)
             else:
                 from django.core.files.storage import FileSystemStorage
+
                 fs = FileSystemStorage(location=settings.MEDIA_ROOT)
                 path = fs.save(filename, ContentFile(buffer.getvalue()))
                 public_url = f"{settings.MEDIA_URL}{path}"
 
             self.qr_code_url = public_url
-            self.assigned_qr_code = code   # make sure it's saved
-            self.save(update_fields=['qr_code_url', 'assigned_qr_code'])
+            self.assigned_qr_code = code  # make sure it's saved
+            self.save(update_fields=["qr_code_url", "assigned_qr_code"])
 
             logger.info(f"QR generated for booking {self.id}: {public_url}")
             return public_url
@@ -519,7 +539,10 @@ class BulkUpload(models.Model):
 
 class Route(models.Model):
     driver = models.ForeignKey(
-        "driver.DriverProfile", on_delete=models.SET_NULL, null=True, related_name='assigned_routes'
+        "driver.DriverProfile",
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="assigned_routes",
     )
     bookings = models.ManyToManyField(Booking)  # Grouped bookings
 
@@ -837,7 +860,7 @@ class Route(models.Model):
                 stop_detail = {
                     "booking_id": str(booking.id),
                     "tracking_number": booking.tracking_number or str(booking.id)[:8],
-                    "type": stop.get('type', self.leg_type),
+                    "type": stop.get("type", self.leg_type),
                     "status": booking.status,
                     "lat": float(addr.latitude),
                     "lng": float(addr.longitude),
@@ -946,6 +969,20 @@ class PricingRule(models.Model):
         ("INSURANCE_RATE", "Insurance fee (% of insured amount)"),
         ("MAX_WEIGHT_KG", "Maximum allowed weight (kg)"),
         ("MAX_DISTANCE_KM", "Maximum allowed distance (km)"),
+
+        # New keys for tiered pricing
+        ("BASE_5KG", "Base price for up to 5kg"),
+        ("BASE_10KG", "Base price for up to 10kg"),
+        ("BASE_15KG", "Base price for up to 15kg"),
+        ("BASE_20KG", "Base price for up to 20kg"),
+        ("BASE_30KG", "Base price for up to 30kg"),
+        ("EXTRA_PARCEL_5KG", "Extra parcel charge for up to 5kg"),
+        ("EXTRA_PARCEL_10KG", "Extra parcel charge for up to 10kg"),
+        ("EXTRA_PARCEL_15KG", "Extra parcel charge for up to 15kg"),
+        ("EXTRA_PARCEL_20KG", "Extra parcel charge for up to 20kg"),
+        ("EXTRA_PARCEL_30KG", "Extra parcel charge for up to 30kg"),
+        ("BASE_DISTANCE_KM", "Included base distance (km)"),
+        ("EXTRA_KM_CHARGE", "Charge per extra km beyond base"),
     ]
 
     key = models.CharField(
