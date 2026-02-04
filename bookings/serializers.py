@@ -75,9 +75,8 @@ class QuoteRequestSerializer(serializers.Serializer):
         max_digits=7, decimal_places=2, min_value=Decimal("0")
     )
 
-    surge = serializers.DecimalField(
-        max_digits=5, decimal_places=2, required=False, default=Decimal("1.00")
-    )
+    num_parcels = serializers.IntegerField(min_value=1, default=1)
+
     discount = serializers.DecimalField(
         max_digits=10, decimal_places=2, required=False, default=Decimal("0.00")
     )
@@ -122,7 +121,7 @@ class QuoteSerializer(serializers.ModelSerializer):
     # Use FloatDecimalField for all Decimal fields
     final_price = FloatDecimalField(max_digits=10, decimal_places=2)
     base_price = FloatDecimalField(max_digits=10, decimal_places=2)
-    surge_multiplier = FloatDecimalField(max_digits=5, decimal_places=2)
+    num_parcels = serializers.IntegerField(min_value=1)
     discount_amount = FloatDecimalField(max_digits=10, decimal_places=2)
     weight_kg = FloatDecimalField(max_digits=6, decimal_places=2)
     distance_km = FloatDecimalField(max_digits=7, decimal_places=2)
@@ -139,7 +138,7 @@ class QuoteSerializer(serializers.ModelSerializer):
             "insurance_amount",
             "dimensions",
             "base_price",
-            "surge_multiplier",
+            "num_parcels",
             "discount_amount",
             "final_price",
             "shipping_type",
@@ -149,34 +148,47 @@ class QuoteSerializer(serializers.ModelSerializer):
             "meta",
             "volume_m3",
         ]
-        read_only_fields = ["id", "created_at", "final_price", "base_price"]
+        read_only_fields = ["id", "created_at", "final_price", "base_price", "meta"]
 
     def create(self, validated_data):
+        # Extract write-only IDs
         shipping_type_id = validated_data.pop("shipping_type_id")
         service_type_id = validated_data.pop("service_type_id")
 
-        shipping_type = ShippingType.objects.get(id=shipping_type_id)
-        service_type = ServiceType.objects.get(id=service_type_id)
+        try:
+            shipping_type = ShippingType.objects.get(id=shipping_type_id)
+            service_type = ServiceType.objects.get(id=service_type_id)
+        except ShippingType.DoesNotExist:
+            raise serializers.ValidationError({"shipping_type_id": "Invalid shipping type"})
+        except ServiceType.DoesNotExist:
+            raise serializers.ValidationError({"service_type_id": "Invalid service type"})
 
-        base_price, final_price, meta = compute_quote(
+        # Prepare inputs for compute_quote
+        # Note: surge is gone — we use num_parcels instead
+        subtotal, final_price, breakdown = compute_quote(
             shipment_type=shipping_type.name,
             service_type=service_type.name,
             weight_kg=validated_data["weight_kg"],
             distance_km=validated_data["distance_km"],
-            fragile=validated_data["fragile"],
-            insurance_amount=validated_data["insurance_amount"],
-            dimensions=validated_data["dimensions"],
-            surge=validated_data["surge"],
-            discount=validated_data["discount"],
+            num_parcels=validated_data.get("num_parcels", 1),
+            insurance_amount=validated_data.get("insurance_amount", Decimal("0")),
+            discount=validated_data.get("discount_amount", Decimal("0")),
+            dimensions=validated_data.get("dimensions", {}),
+            fragile=validated_data.get("fragile", False),
         )
 
-        validated_data["base_price"] = base_price
-        validated_data["meta"] = meta
+        # Store computed values
+        validated_data["base_price"] = subtotal
         validated_data["final_price"] = final_price
+        validated_data["meta"] = breakdown
 
+        # Create the quote
         quote = Quote.objects.create(
-            shipping_type=shipping_type, service_type=service_type, **validated_data
+            shipping_type=shipping_type,
+            service_type=service_type,
+            **validated_data
         )
+
         return quote
 
 
