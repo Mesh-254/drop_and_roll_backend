@@ -1,0 +1,116 @@
+{% extends "admin/base_site.html" %} {% load i18n admin_urls static %} 
+{% block extrastyle %}
+<!-- If not using django-unfold or full Tailwind setup, add CDN -->
+<!-- <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet"> -->
+<!-- But preferably use your project's compiled Tailwind -->
+{% endblock %} {% block content %}
+<div
+  class="max-w-4xl mx-auto py-10 px-6 bg-white shadow-xl rounded-xl border border-gray-200"
+>
+  <h1 class="text-3xl font-bold text-gray-900 mb-2">
+    Create Manual Route from Selected Bookings
+  </h1>
+  <p class="text-gray-600 mb-8">
+    {{ bookings|length }} booking{{ bookings|length|pluralize }} selected
+  </p>
+
+  <form method="post" class="space-y-8">
+    {% csrf_token %}
+
+    <!-- Hidden fields for selected items -->
+    {% for obj in bookings %}
+    <input type="hidden" name="_selected_action" value="{{ obj.pk }}" />
+    {% endfor %}
+    <input type="hidden" name="action" value="create_route_from_selected" />
+
+    <!-- Form fields with nice Tailwind styling -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div>
+        <label
+          for="{{ form.hub.id_for_label }}"
+          class="block text-sm font-medium text-gray-700 mb-1"
+        >
+          {{ form.hub.label }}
+        </label>
+        <div class="mt-1">{{ form.hub }}</div>
+        {% if form.hub.errors %}
+        <p class="mt-1 text-sm text-red-600">{{ form.hub.errors|join:", " }}</p>
+        {% endif %}
+        <p class="mt-1 text-xs text-gray-500">
+          Leave empty to use the hub from selected bookings
+        </p>
+      </div>
+
+      <div>
+        <label
+          for="{{ form.leg_type.id_for_label }}"
+          class="block text-sm font-medium text-gray-700 mb-1"
+        >
+          {{ form.leg_type.label }}
+        </label>
+        <div class="mt-1">{{ form.leg_type }}</div>
+        {% if form.leg_type.errors %}
+        <p class="mt-1 text-sm text-red-600">
+          {{ form.leg_type.errors|join:", " }}
+        </p>
+        {% endif %}
+      </div>
+    </div>
+
+    <div>
+      <label
+        for="{{ form.driver.id_for_label }}"
+        class="block text-sm font-medium text-gray-700 mb-1"
+      >
+        {{ form.driver.label }}
+      </label>
+      <div class="mt-1">{{ form.driver }}</div>
+      {% if form.driver.errors %}
+      <p class="mt-1 text-sm text-red-600">
+        {{ form.driver.errors|join:", " }}
+      </p>
+      {% endif %}
+      <p class="mt-1 text-xs text-gray-500">
+        Optional — route will be pending if no driver selected
+      </p>
+    </div>
+
+    <!-- Selected bookings summary -->
+    <div class="bg-gray-50 p-5 rounded-lg border border-gray-200">
+      <h3 class="text-lg font-semibold text-gray-800 mb-3">
+        Selected Bookings
+      </h3>
+      <ul class="space-y-2 text-sm text-gray-700">
+        {% for booking in bookings %}
+        <li class="flex justify-between">
+          <span>{{ booking.tracking_number }} — {{ booking.get_customer_name }}</span>
+          <span class="text-gray-500">{{ booking.status }}</span>
+        </li>
+        {% empty %}
+        <li class="text-gray-500 italic">No bookings selected</li>
+        {% endfor %}
+      </ul>
+    </div>
+
+    <!-- Buttons -->
+    <div
+      class="flex items-center justify-end space-x-4 pt-6 border-t border-gray-200"
+    >
+      <a
+        href="{% url 'admin:bookings_booking_changelist' %}"
+        class="px-5 py-2.5 bg-gray-200 text-gray-800 font-medium rounded-lg hover:bg-gray-300 transition"
+      >
+        Cancel
+      </a>
+      <button
+        type="submit"
+        name="apply"
+        value="Apply"
+        class="px-6 py-2.5 bg-indigo-600 text-white font-medium rounded-lg hover:bg-indigo-700 shadow-md transition focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+      >
+        Create Route
+      </button>
+    </div>
+  </form>
+</div>
+{% endblock %}
