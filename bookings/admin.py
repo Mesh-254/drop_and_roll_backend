@@ -1,5 +1,6 @@
 from django.contrib import admin
 from django.utils.html import format_html
+from .utils.actions import create_route_from_selected
 from unfold.admin import ModelAdmin
 from .models import (
     Address,
@@ -23,9 +24,8 @@ from django.core.paginator import Paginator
 from decimal import Decimal
 from django.shortcuts import get_object_or_404
 from bookings.models import BookingStatus
-from payments.models import PaymentStatus, PaymentTransaction
+from payments.models import PaymentStatus, PaymentTransaction, Refund
 from payments.api_views import RefundSerializer
-from payments.models import PaymentStatus, Refund
 from .models import Route, Hub
 from django.db import transaction  # For atomic transactions
 from rest_framework import serializers  # Import serializers for ValidationError
@@ -104,27 +104,27 @@ class RouteAdmin(ModelAdmin):
         # Efficient: Prefetch bookings/driver
         return super().get_queryset(request).prefetch_related("bookings", "driver")
 
-    def assign_driver(self, request, queryset):
-        if "apply" in request.POST:
-            driver_id = request.POST.get("driver")
-            driver = get_object_or_404(DriverProfile, id=driver_id)
-            with transaction.atomic():
-                for route in queryset:
-                    if route.driver:
-                        continue  # Skip if already assigned
-                    if route.hub and route.hub != driver.hub:
-                        continue  # Skip hub mismatch
-                    route.driver = driver
-                    route.hub = driver.hub if not route.hub else route.hub
-                    route.status = "assigned"
-                    route.save()
-                    route.bookings.update(
-                        driver=driver, hub=route.hub, status="assigned"
-                    )
-                self.message_user(
-                    request, "Drivers assigned successfully.", level=messages.SUCCESS
-                )
-            return HttpResponseRedirect(".")
+    # def assign_driver(self, request, queryset):
+    #     if "apply" in request.POST:
+    #         driver_id = request.POST.get("driver")
+    #         driver = get_object_or_404(DriverProfile, id=driver_id)
+    #         with transaction.atomic():
+    #             for route in queryset:
+    #                 if route.driver:
+    #                     continue  # Skip if already assigned
+    #                 if route.hub and route.hub != driver.hub:
+    #                     continue  # Skip hub mismatch
+    #                 route.driver = driver
+    #                 route.hub = driver.hub if not route.hub else route.hub
+    #                 route.status = "assigned"
+    #                 route.save()
+    #                 route.bookings.update(
+    #                     driver=driver, hub=route.hub, status="assigned"
+    #                 )
+    #             self.message_user(
+    #                 request, "Drivers assigned successfully.", level=messages.SUCCESS
+    #             )
+    #         return HttpResponseRedirect(".")
 
     def driver_link(self, obj):
         if obj.driver:
@@ -326,6 +326,15 @@ class BookingAdmin(ModelAdmin):
         )
 
     get_driver_name.short_description = "Driver"
+
+    # ────────────────────────────────────────────────
+    # Action: Create route manually from selected bookings
+    # (ideal for same-day / urgent bookings skipped by auto-task)
+    # ────────────────────────────────────────────────
+    def create_route_from_selected(self, request, queryset):
+        return create_route_from_selected(self, request, queryset)
+
+    create_route_from_selected.short_description = "Create route from selected bookings (manual / same-day)"
 
     # ------------------------------------------------------------------
     # Fixed get_hub – uses the real `hub` field (not route)
@@ -540,7 +549,7 @@ class BookingAdmin(ModelAdmin):
         return custom_urls + urls
 
     # Custom bulk action for assigning driver
-    actions = ["assign_driver"]
+    actions = ["assign_driver", "create_route_from_selected"]
 
     def assign_driver(self, request, queryset):
         class AssignDriverForm(forms.Form):
