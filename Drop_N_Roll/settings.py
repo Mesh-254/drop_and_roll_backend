@@ -63,6 +63,7 @@ INSTALLED_APPS = [
     "celery",
     "corsheaders",
     "social_django",
+    "widget_tweaks",
 
     # for live location tracking
     "channels",
